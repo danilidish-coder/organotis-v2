@@ -15,6 +15,11 @@ SCHEMA_VERSION = 1
 ENV_CONFIG = "ORGANOTIS_CONFIG"
 
 
+def _is_simple_name(name: object) -> bool:
+    return (isinstance(name, str) and bool(name.strip()) and name not in (".", "..")
+            and not any(c in name for c in '/\\:*?"<>|'))
+
+
 class ConfigError(ValueError):
     """Μη έγκυρο αρχείο ρυθμίσεων (το μήνυμα είναι σε απλά ελληνικά)."""
 
@@ -33,6 +38,27 @@ def default_config_path() -> Path:
     return base_path / "organotis" / "config.json"
 
 
+def _default_topic_rules() -> list[dict]:
+    # Κάθε κανόνας: θέμα + λέξεις-κλειδιά. Η σύγκριση αγνοεί τόνους και κεφαλαία.
+    # Δεν υπάρχουν κανόνες για ονόματα προσώπων (αρχή 4).
+    return [
+        {"topic": "Φορολογικά", "keywords": [
+            "εκκαθαριστικο", "φορολογικη δηλωση", "αφμ", "ααδε", "ε1", "ε9", "ενφια", "δου"]},
+        {"topic": "Λογαριασμοί", "keywords": [
+            "δεη", "ευδαπ", "λογαριασμος", "ρευμα", "οτε", "cosmote", "vodafone", "nova", "κοινοχρηστα"]},
+        {"topic": "Τράπεζα", "keywords": [
+            "τραπεζα", "iban", "κινηση λογαριασμου", "δανειο", "καταθεση", "πιστωτικη καρτα"]},
+        {"topic": "Ασφάλιση", "keywords": [
+            "ασφαλιστηριο", "ασφαλιση", "ασφαλιστικη", "εφκα", "ικα", "συνταξη"]},
+        {"topic": "Υγεία", "keywords": [
+            "εξετασεις", "ιατρικη", "γνωματευση", "εοπυυ", "συνταγη", "νοσοκομειο"]},
+        {"topic": "Εκπαίδευση", "keywords": [
+            "απολυτηριο", "πτυχιο", "βαθμολογια", "σχολειο", "πανεπιστημιο", "πιστοποιητικο σπουδων"]},
+        {"topic": "Συμβόλαια", "keywords": [
+            "συμβολαιο", "μισθωτηριο", "συμφωνητικο", "αγοραπωλησια"]},
+    ]
+
+
 @dataclass
 class Config:
     # Φάκελοι που σαρώνονται (μόνο ανάγνωση). Κενό μέχρι να τους ορίσει ο χρήστης.
@@ -49,6 +75,13 @@ class Config:
         "image": [".jpg", ".jpeg", ".png"],
         "exe": [".exe"],
     })
+    # Κανόνες θέματος: λίστα από {"topic": ..., "keywords": [...]}.
+    topic_rules: list[dict] = field(default_factory=_default_topic_rules)
+    # Ονόματα φακέλων προορισμού (απλά ονόματα, μέσα στον φάκελο σάρωσης).
+    documents_folder: str = "Έγγραφα"
+    images_folder: str = "Εικόνες"
+    programs_folder: str = "Προγράμματα"
+    duplicates_subfolder: str = "Διπλότυπα"
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -61,13 +94,24 @@ class Config:
             isinstance(p, str) and p.strip() for p in self.scan_roots
         ):
             raise ConfigError("Το «scan_roots» πρέπει να είναι λίστα με διαδρομές φακέλων.")
-        name = self.review_folder_name
-        if not isinstance(name, str) or not name.strip() or any(
-            c in name for c in "/\\"
-        ) or name in (".", ".."):
+        if not _is_simple_name(self.review_folder_name):
             raise ConfigError(
                 "Το «review_folder_name» πρέπει να είναι απλό όνομα φακέλου, χωρίς κάθετους."
             )
+        for attr in ("documents_folder", "images_folder", "programs_folder", "duplicates_subfolder"):
+            if not _is_simple_name(getattr(self, attr)):
+                raise ConfigError(f"Το «{attr}» πρέπει να είναι απλό όνομα φακέλου, χωρίς κάθετους.")
+        if not isinstance(self.topic_rules, list):
+            raise ConfigError("Το «topic_rules» πρέπει να είναι λίστα κανόνων.")
+        for rule in self.topic_rules:
+            if (not isinstance(rule, dict) or set(rule) != {"topic", "keywords"}
+                    or not _is_simple_name(rule["topic"])
+                    or not isinstance(rule["keywords"], list) or not rule["keywords"]
+                    or not all(isinstance(k, str) and k.strip() for k in rule["keywords"])):
+                raise ConfigError(
+                    "Κάθε κανόνας θέματος χρειάζεται «topic» (απλό όνομα φακέλου) "
+                    "και μη κενή λίστα «keywords»."
+                )
         if not isinstance(self.manifest_dir, str):
             raise ConfigError("Το «manifest_dir» πρέπει να είναι κείμενο.")
         if not isinstance(self.extensions, dict):

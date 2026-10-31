@@ -69,3 +69,33 @@ def format_report(r: Report, max_groups: int = 50) -> str:
         out.append(f"Προβλήματα ({len(r.problems)}), τα αρχεία αυτά δεν συμμετέχουν στη σύγκριση:")
         out.extend(f"  ! {_rel(p.path, r.root)}: {p.reason}" for p in r.problems)
     return "\n".join(out)
+
+
+def format_plan(plan, max_rows: int = 200) -> str:
+    """Πρόταση δομής σε απλά ελληνικά. Δεν αλλάζει τίποτα."""
+    from .planner import KEEP, MOVE, REVIEW
+
+    root = plan.root
+    moves, reviews, keeps = plan.by_action(MOVE), plan.by_action(REVIEW), plan.by_action(KEEP)
+    out = [f"Πρόταση δομής για: {root}",
+           "(Μόνο πρόταση: δεν μετακινήθηκε ούτε άλλαξε τίποτα. Κάθε γραμμή έχει τον λόγο της.)",
+           "",
+           f"Προτείνονται {len(moves)} μετακινήσεις, {len(reviews)} αρχεία στον φάκελο ελέγχου "
+           f"(διπλότυπα), {len(keeps)} μένουν στη θέση τους."]
+
+    def block(title: str, items: list) -> None:
+        if not items:
+            return
+        out.extend(["", title])
+        for p in items[:max_rows]:
+            dest = _rel(p.dest, root) if p.dest else "(μένει εκεί που είναι)"
+            out.append(f"  • {_rel(p.entry.path, root)}")
+            out.append(f"      → {dest}")
+            out.append(f"      Λόγος [{p.rule}]: {p.reason}")
+        if len(items) > max_rows:
+            out.append(f"  … και {len(items) - max_rows} ακόμη.")
+
+    block("Μετακινήσεις:", moves)
+    block("Στον φάκελο ελέγχου (διπλότυπα, καμία διαγραφή):", reviews)
+    block("Μένουν στη θέση τους:", keeps)
+    return "\n".join(out)

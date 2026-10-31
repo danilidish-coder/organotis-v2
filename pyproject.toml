@@ -7,7 +7,7 @@ name = "organotis"
 dynamic = ["version"]
 description = "Οργανωτής αρχείων (organotis-v2)"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["pypdf>=4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

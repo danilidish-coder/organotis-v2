@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 from . import __version__, config as cfgmod
-from .formatting import format_report
+from .formatting import format_plan, format_report
+from .planner import build_plan
 from .scanner import build_report, scan
 
 
@@ -23,17 +24,19 @@ def build_parser() -> argparse.ArgumentParser:
     csub.add_parser("init", help="δημιουργία αρχείου ρυθμίσεων (δεν αντικαθιστά υπάρχον)")
     s = sub.add_parser("scan", help="σάρωση φακέλου και αναφορά (μόνο ανάγνωση)")
     s.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, οι φάκελοι από τις ρυθμίσεις")
+    pl = sub.add_parser("plan", help="πρόταση δομής με ορατούς κανόνες (δεν μετακινεί τίποτα)")
+    pl.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, οι φάκελοι από τις ρυθμίσεις")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.cmd not in ("config", "scan"):
+    if args.cmd not in ("config", "scan", "plan"):
         parser.print_help()
         return 0
     path = cfgmod.default_config_path()
-    if args.cmd == "scan":
+    if args.cmd in ("scan", "plan"):
         try:
             cfg = cfgmod.load(path)
         except cfgmod.ConfigError as exc:
@@ -46,7 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         for i, root in enumerate(roots):
             if i:
                 print("\n" + "=" * 60 + "\n")
-            print(format_report(build_report(scan(Path(root).expanduser(), cfg))))
+            result = scan(Path(root).expanduser(), cfg)
+            report = build_report(result)
+            if args.cmd == "scan":
+                print(format_report(report))
+            else:
+                print(format_plan(build_plan(result, report, cfg)))
         return 0
     try:
         if args.config_cmd == "path":
