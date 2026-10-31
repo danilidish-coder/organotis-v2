@@ -1,4 +1,4 @@
-# Χτίζει το EXE τοπικά στα Windows (εναλλακτική του GitHub Actions).
+﻿# Χτίζει το EXE τοπικά στα Windows (εναλλακτική του GitHub Actions).
 # Χρήση, από τον φάκελο του έργου, σε PowerShell:  .\packaging\build_windows.ps1
 # Χρειάζεται Python 3.12 (με tkinter, όπως στον επίσημο εγκαταστάτη) στο PATH.
 $ErrorActionPreference = 'Stop'
