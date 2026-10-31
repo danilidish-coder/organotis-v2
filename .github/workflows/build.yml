@@ -52,6 +52,21 @@ jobs:
           sudo apt-get install -y -q xvfb python3-tk
           xvfb-run -a python -m pytest -q
 
+  source:
+    name: Πηγαίος κώδικας
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Εξαγωγή αρχείων του commit (χωρίς .git)
+        run: |
+          mkdir organotis-v2-source
+          git archive HEAD | tar -x -C organotis-v2-source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: organotis-source
+          path: organotis-v2-source
+          if-no-files-found: error
+
   build-exe:
     name: Χτίσιμο EXE (Windows)
     needs: test
