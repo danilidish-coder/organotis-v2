@@ -30,7 +30,7 @@ class ManifestWriter:
     def __init__(self, directory: Path, root: Path, app_version: str):
         directory.mkdir(parents=True, exist_ok=True)
         self.root = root
-        self.run_id = datetime.now().strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(2)
+        self.run_id = datetime.now().strftime("%Y%m%dT%H%M%S%f") + "-" + secrets.token_hex(2)
         self.path = directory / f"{self.run_id}.jsonl"
         self._f = open(self.path, "x", encoding="utf-8")  # "x": ποτέ δεν γράφει πάνω σε υπάρχον
         self.write({"t": "start", "format": FORMAT, "run": self.run_id, "app_version": app_version,
@@ -72,6 +72,8 @@ class Op:
     reason: str
     state: str = "pending"  # pending | done | skipped | conflict
     why: str = ""
+    undo: str = ""          # "" (δεν αναιρέθηκε) | pending | undone | skipped
+    undo_why: str = ""
 
 
 @dataclass
@@ -84,6 +86,9 @@ class Manifest:
     dirs: list[list[str]] = field(default_factory=list)  # φάκελοι που δημιούργησε η εκτέλεση
     ended: bool = False
     status: str = ""
+    undo_started: bool = False
+    undo_ended: bool = False
+    undo_status: str = ""
 
     def src_path(self, op: Op) -> Path:
         return from_parts(self.root, op.src)
@@ -128,6 +133,15 @@ def read(path: Path) -> Manifest:
         elif t == "end":
             m.ended = True
             m.status = r.get("status", "")
+        elif t == "undo_start":
+            m.undo_started, m.undo_ended = True, False
+        elif t in ("undo_intent", "undone", "undo_skip") and r.get("i") in by_index:
+            op = by_index[r["i"]]
+            op.undo = {"undo_intent": "pending", "undone": "undone", "undo_skip": "skipped"}[t]
+            op.undo_why = r.get("why", "")
+        elif t == "undo_end":
+            m.undo_ended = True
+            m.undo_status = r.get("status", "")
     return m
 
 

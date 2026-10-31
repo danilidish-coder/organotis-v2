@@ -9,10 +9,13 @@ from pathlib import Path
 
 from . import __version__, config as cfgmod
 from .approval import PreviewModel, parse_numbers
-from .formatting import format_plan, format_preview, format_report
+from .formatting import (format_plan, format_preview, format_report, format_runs,
+                         format_undo_preview)
 from .mover import execute
 from .planner import build_plan
 from .scanner import build_report, scan
+from .undo import list_runs, pending_ops, undo as run_undo
+from . import manifest as mfmod
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="γραμμές που αφαιρούνται από την προεπισκόπηση, π.χ. 1,3,5-7")
     mv.add_argument("--yes", action="store_true",
                     help="έγκριση χωρίς ερώτηση (η προεπισκόπηση τυπώνεται πάντα πρώτα)")
+    un = sub.add_parser("undo", help="αναίρεση εκτέλεσης από το manifest (δουλεύει και μετά από επανεκκίνηση)")
+    un.add_argument("run", nargs="?", help="κωδικός εκτέλεσης· αν λείπει, εμφανίζεται η λίστα")
+    un.add_argument("--last", action="store_true", help="η πιο πρόσφατη εκτέλεση")
+    un.add_argument("--yes", action="store_true", help="έγκριση χωρίς ερώτηση")
+    un.add_argument("--include-modified", action="store_true",
+                    help="επιστροφή και αρχείων που άλλαξαν μετά τη μετακίνηση")
     sub.add_parser("gui", help="γραφικό περιβάλλον")
     return p
 
@@ -46,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
     path = cfgmod.default_config_path()
     if args.cmd == "move":
         return _move(args, path)
+    if args.cmd == "undo":
+        return _undo(args, path)
     if args.cmd in ("scan", "plan"):
         try:
             cfg = cfgmod.load(path)
@@ -158,4 +169,64 @@ def _move(args, config_path: Path) -> int:
     for p, why in res.skipped:
         print(f"  ! {p.entry.path.name}: {why}")
     print(f"Manifest (για αναίρεση): {res.manifest_path}")
+    return 0 if not res.skipped else 3
+
+
+def _undo(args, config_path: Path) -> int:
+    try:
+        cfg = cfgmod.load(config_path)
+    except cfgmod.ConfigError as exc:
+        print(f"Σφάλμα ρυθμίσεων: {exc}", file=sys.stderr)
+        return 2
+    mdir = cfg.manifest_path(config_path)
+    runs = list_runs(mdir)
+    if not args.run and not args.last:
+        print(format_runs(runs))
+        if runs:
+            print("\nΓια αναίρεση: organotis undo --last   ή   organotis undo ΚΩΔΙΚΟΣ")
+        return 0
+    if args.run:
+        matches = [r for r in runs if r.run_id == args.run]
+        if not matches:
+            print(f"Δεν βρέθηκε εκτέλεση «{args.run}».", file=sys.stderr)
+            return 2
+        run = matches[0]
+    else:
+        candidates = [r for r in runs if r.remaining > 0]
+        if not candidates:
+            print("Δεν υπάρχει εκτέλεση με αρχεία προς αναίρεση.")
+            return 0
+        run = candidates[0]
+    m = mfmod.read(run.path)
+    ops = pending_ops(m)
+    if not ops:
+        print("Δεν υπάρχει τίποτα προς αναίρεση σε αυτή την εκτέλεση.")
+        return 0
+    print(f"Εκτέλεση {run.run_id} ({run.started.replace('T', ' ')})")
+    print(format_undo_preview(m, ops))
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("\nΧρειάζεται έγκριση. Τρέξε την εντολή σε τερματικό ή πρόσθεσε --yes. "
+                  "Δεν αναιρέθηκε τίποτα.", file=sys.stderr)
+            return 1
+        try:
+            if input("\nΓράψε ΝΑΙ για να επιστρέψουν τα αρχεία: ").strip() != "ΝΑΙ":
+                print("Ακυρώθηκε. Δεν αναιρέθηκε τίποτα.")
+                return 1
+        except (EOFError, KeyboardInterrupt):
+            print("\nΑκυρώθηκε. Δεν αναιρέθηκε τίποτα.")
+            return 1
+    try:
+        res = run_undo(run.path, allow_modified=args.include_modified)
+    except ValueError as exc:
+        print(f"Σφάλμα: {exc}", file=sys.stderr)
+        return 2
+    for note in res.recovered_notes:
+        print(f"Ανάκτηση από προηγούμενη διακοπή: {note}")
+    print(f"\nΕπέστρεψαν {res.restored} αρχεία, παραλείφθηκαν {len(res.skipped)}, "
+          f"αφαιρέθηκαν {res.removed_dirs} άδειοι φάκελοι που είχε φτιάξει η εκτέλεση.")
+    for op, why in res.skipped:
+        print(f"  ! {op.src[-1]}: {why}")
+    if res.skipped:
+        print("Όσα παραλείφθηκαν μπορείς να τα ξαναδοκιμάσεις αργότερα με την ίδια εντολή.")
     return 0 if not res.skipped else 3

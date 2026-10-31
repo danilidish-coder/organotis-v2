@@ -16,6 +16,7 @@ from .approval import PreviewModel
 from .mover import execute
 from .planner import build_plan
 from .scanner import build_report, scan
+from .undo import list_runs, undo as run_undo
 
 
 class App:
@@ -69,6 +70,8 @@ class App:
         self.btn_remove.pack(side="left")
         self.btn_restore = ttk.Button(bar, text="Επαναφορά επιλεγμένων", command=self.restore_selected)
         self.btn_restore.pack(side="left", padx=6)
+        self.btn_undo = ttk.Button(bar, text="Αναίρεση…", command=self.open_undo)
+        self.btn_undo.pack(side="left", padx=(24, 0))
         self.btn_cancel = ttk.Button(bar, text="Διακοπή", command=self.stop.set, state="disabled")
         self.btn_cancel.pack(side="right")
         self.btn_go = ttk.Button(bar, text="Μετακίνηση εγκεκριμένων…", command=self.confirm_and_move, state="disabled")
@@ -86,6 +89,7 @@ class App:
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.btn_scan.configure(state="disabled" if busy else "normal")
+        self.btn_undo.configure(state="disabled" if busy else "normal")
         self.btn_cancel.configure(state="normal" if busy else "disabled")
         self.refresh_buttons()
 
@@ -182,6 +186,62 @@ class App:
                 self.q.put(("error", f"Η μετακίνηση σταμάτησε: {exc}"))
         threading.Thread(target=work, daemon=True).start()
 
+    # ---- αναίρεση ----
+    def open_undo(self) -> None:
+        if self.busy:
+            return
+        self.undo_runs = list_runs(self.cfg.manifest_path(self.config_path))
+        win = self.undo_win = tk.Toplevel(self.root)
+        win.title("Αναίρεση εκτέλεσης")
+        ttk.Label(win, text="Διάλεξε εκτέλεση. Τα αρχεία επιστρέφουν στην αρχική τους θέση "
+                            "(όχι πάνω σε άλλα αρχεία, χωρίς διαγραφές).", padding=8).pack(anchor="w")
+        self.undo_list = tk.Listbox(win, width=100, height=12, exportselection=False)
+        for r in self.undo_runs:
+            self.undo_list.insert("end", f"{r.started.replace('T', ' ')}   {r.moved} αρχεία   "
+                                         f"{r.label}   [{r.root}]")
+        self.undo_list.pack(fill="both", expand=True, padx=8)
+        if not self.undo_runs:
+            ttk.Label(win, text="Δεν υπάρχουν καταγεγραμμένες εκτελέσεις.", padding=8).pack()
+        ttk.Button(win, text="Αναίρεση επιλεγμένης…", command=self.confirm_and_undo).pack(pady=8)
+
+    def confirm_and_undo(self) -> None:
+        sel = self.undo_list.curselection()
+        if not sel or self.busy:
+            return
+        run = self.undo_runs[sel[0]]
+        if run.remaining == 0:
+            messagebox.showinfo("Αναίρεση", "Σε αυτή την εκτέλεση δεν υπάρχει τίποτα προς αναίρεση.")
+            return
+        if not messagebox.askyesno(
+                "Έγκριση αναίρεσης",
+                f"Θα επιστραφούν έως {run.remaining} αρχεία στην αρχική τους θέση.\n"
+                "Όσα άλλαξαν ή έχουν πιαστεί οι θέσεις τους θα παραλειφθούν και θα σου εμφανιστούν.\n\n"
+                "Συνέχεια;"):
+            return
+        self.undo_win.destroy()
+        self.stop.clear()
+        self.set_busy(True)
+
+        def work() -> None:
+            try:
+                res = run_undo(run.path, should_stop=self.stop.is_set,
+                               progress=lambda i, n, op: self.q.put(("uprogress", (i, n))))
+                self.q.put(("undone", res))
+            except Exception as exc:
+                self.q.put(("error", f"Η αναίρεση σταμάτησε: {exc}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def finish_undo(self, res) -> None:
+        msg = f"Επέστρεψαν {res.restored}, παραλείφθηκαν {len(res.skipped)}, αφαιρέθηκαν {res.removed_dirs} άδειοι φάκελοι."
+        if res.status == "stopped":
+            msg += " (Διακόπηκε από εσένα.)"
+        if res.skipped:
+            msg += "\n\nΠαραλείφθηκαν:\n" + "\n".join(
+                f"• {op.src[-1]}: {why}" for op, why in res.skipped[:15])
+            msg += "\n\nΜπορείς να ξαναδοκιμάσεις αργότερα."
+        self.status.set(msg.split("\n")[0])
+        messagebox.showinfo("Αναίρεση", msg)
+
     # ---- ουρά μηνυμάτων από τα νήματα ----
     def poll(self) -> None:
         try:
@@ -192,6 +252,11 @@ class App:
                     self.load_plan(data)
                 elif kind == "progress":
                     self.status.set(f"Μετακίνηση {data[0]} από {data[1]}…")
+                elif kind == "uprogress":
+                    self.status.set(f"Αναίρεση {data[0]} από {data[1]}…")
+                elif kind == "undone":
+                    self.set_busy(False)
+                    self.finish_undo(data)
                 elif kind == "done":
                     self.set_busy(False)
                     self.finish(data)

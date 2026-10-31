@@ -101,3 +101,32 @@ def test_scan_button_runs_in_background(app, tree):
     app.start_scan()
     pump(app, lambda: app.model is not None)
     assert len(app.model.rows) == 3 and not app.busy
+
+
+def test_undo_dialog_restores_after_confirmation(app, tree, monkeypatch):
+    from organotis.mover import execute
+    from organotis.approval import PreviewModel
+    before = sorted((str(p.relative_to(tree)), p.read_bytes() if p.is_file() else None) for p in tree.rglob("*"))
+    execute(PreviewModel(plan_of(app, tree)).approve(), app.cfg.manifest_path(app.config_path))
+    app.open_undo()
+    assert app.undo_list.size() == 1 and "εφαρμόστηκε" in app.undo_list.get(0)
+    app.undo_list.selection_set(0)
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda *a, **k: True)
+    shown = []
+    monkeypatch.setattr(gui.messagebox, "showinfo", lambda *a, **k: shown.append(a))
+    app.confirm_and_undo()
+    pump(app, lambda: bool(shown))
+    after = sorted((str(p.relative_to(tree)), p.read_bytes() if p.is_file() else None) for p in tree.rglob("*"))
+    assert after == before and not app.busy
+    assert "Επέστρεψαν 3" in shown[0][1]
+
+
+def test_undo_dialog_decline_changes_nothing(app, tree, monkeypatch):
+    from organotis.mover import execute
+    from organotis.approval import PreviewModel
+    execute(PreviewModel(plan_of(app, tree)).approve(), app.cfg.manifest_path(app.config_path))
+    moved = sorted(p.relative_to(tree) for p in tree.rglob("*"))
+    app.open_undo(); app.undo_list.selection_set(0)
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda *a, **k: False)
+    app.confirm_and_undo(); app.root.update()
+    assert sorted(p.relative_to(tree) for p in tree.rglob("*")) == moved

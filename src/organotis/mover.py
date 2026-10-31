@@ -156,33 +156,44 @@ def execute(approved: ApprovedPlan, manifest_dir: Path,
 # ---------- ανάκτηση μετά από διακοπή ----------
 
 def reconcile(path: Path) -> list[str]:
-    """Κλείνει ένα manifest που διακόπηκε: ελέγχει τον δίσκο για κάθε «intent» χωρίς τέλος.
+    """Κλείνει ένα manifest που διακόπηκε, είτε στη μετακίνηση είτε στην αναίρεση.
 
+    Για κάθε «intent» χωρίς αποτέλεσμα κοιτάζει τον δίσκο:
     - το αρχείο είναι ακόμη στην αρχική θέση → δεν πρόλαβε να μετακινηθεί
     - το αρχείο είναι μόνο στον προορισμό → μετακινήθηκε (καταγράφεται ως done)
     - και στα δύο ή πουθενά → «conflict», δεν αγγίζεται τίποτα, ενημερώνεται ο χρήστης
-    Δεν μετακινεί και δεν διαγράφει τίποτα.
+    Στην αναίρεση ισχύει το αντίστροφο. Δεν μετακινεί και δεν διαγράφει τίποτα.
     """
     m = mf.read(path)
     notes: list[str] = []
     for op in m.ops:
-        if op.state != "pending":
-            continue
         src_exists = os.path.lexists(m.src_path(op))
         dest_exists = os.path.lexists(m.dest_path(op))
         name = op.src[-1]
-        if src_exists and not dest_exists:
-            mf.append(path, {"t": "skip", "i": op.index, "why": "Η εκτέλεση διακόπηκε πριν μετακινηθεί."})
-            notes.append(f"«{name}»: δεν πρόλαβε να μετακινηθεί, μένει στη θέση του.")
-        elif dest_exists and not src_exists:
-            mf.append(path, {"t": "done", "i": op.index, "why": "Ανακτήθηκε μετά από διακοπή."})
-            notes.append(f"«{name}»: είχε μετακινηθεί, καταγράφηκε στο manifest.")
-        else:
-            why = ("Υπάρχει και στις δύο θέσεις." if src_exists else "Δεν βρέθηκε πουθενά.")
-            mf.append(path, {"t": "conflict", "i": op.index, "why": why})
-            notes.append(f"«{name}»: {why} Έλεγξέ το χειροκίνητα, δεν άλλαξε τίποτα.")
+        if op.state == "pending":
+            if src_exists and not dest_exists:
+                mf.append(path, {"t": "skip", "i": op.index, "why": "Η εκτέλεση διακόπηκε πριν μετακινηθεί."})
+                notes.append(f"«{name}»: δεν πρόλαβε να μετακινηθεί, μένει στη θέση του.")
+            elif dest_exists and not src_exists:
+                mf.append(path, {"t": "done", "i": op.index, "why": "Ανακτήθηκε μετά από διακοπή."})
+                notes.append(f"«{name}»: είχε μετακινηθεί, καταγράφηκε στο manifest.")
+            else:
+                why = ("Υπάρχει και στις δύο θέσεις." if src_exists else "Δεν βρέθηκε πουθενά.")
+                mf.append(path, {"t": "conflict", "i": op.index, "why": why})
+                notes.append(f"«{name}»: {why} Έλεγξέ το χειροκίνητα, δεν άλλαξε τίποτα.")
+        if op.undo == "pending":
+            if src_exists and not dest_exists:
+                mf.append(path, {"t": "undone", "i": op.index, "why": "Ανακτήθηκε μετά από διακοπή."})
+                notes.append(f"«{name}»: είχε αναιρεθεί, καταγράφηκε στο manifest.")
+            else:
+                why = ("Υπάρχει και στις δύο θέσεις." if src_exists and dest_exists
+                       else "Η αναίρεση διακόπηκε πριν γίνει.")
+                mf.append(path, {"t": "undo_skip", "i": op.index, "why": why})
+                notes.append(f"«{name}»: {why} Μπορείς να ξανατρέξεις την αναίρεση.")
     if not m.ended:
         mf.append(path, {"t": "end", "status": "recovered"})
+    if m.undo_started and not m.undo_ended:
+        mf.append(path, {"t": "undo_end", "status": "recovered"})
     return notes
 
 
@@ -190,7 +201,8 @@ def reconcile_all(manifest_dir: Path) -> list[str]:
     notes: list[str] = []
     for path in mf.list_manifests(manifest_dir):
         try:
-            if not mf.read(path).ended:
+            m = mf.read(path)
+            if not m.ended or (m.undo_started and not m.undo_ended):
                 notes.extend(reconcile(path))
         except ValueError as exc:
             notes.append(str(exc))

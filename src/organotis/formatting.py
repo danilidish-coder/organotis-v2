@@ -115,3 +115,23 @@ def format_preview(model, max_rows: int = 500) -> str:
     if len(model.rows) > max_rows:
         out.append(f"… και {len(model.rows) - max_rows} ακόμη γραμμές (δεν εμφανίζονται εδώ).")
     return "\n".join(out)
+
+
+def format_runs(runs) -> str:
+    if not runs:
+        return "Δεν υπάρχουν καταγεγραμμένες εκτελέσεις."
+    out = ["Εκτελέσεις (οι πιο πρόσφατες πρώτα):"]
+    for r in runs:
+        out.append(f"  {r.run_id}   {r.started.replace('T', ' ')}   {r.moved} αρχεία   {r.label}")
+        out.append(f"      φάκελος: {r.root}")
+    return "\n".join(out)
+
+
+def format_undo_preview(m, ops, max_rows: int = 200) -> str:
+    out = [f"Θα επιστραφούν {len(ops)} αρχεία στην αρχική τους θέση (φάκελος: {m.root}):"]
+    for op in ops[:max_rows]:
+        out.append(f"  • {'/'.join(op.dest)}")
+        out.append(f"      → {'/'.join(op.src)}")
+    if len(ops) > max_rows:
+        out.append(f"  … και {len(ops) - max_rows} ακόμη.")
+    return "\n".join(out)
