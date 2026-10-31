@@ -50,6 +50,7 @@
 - Το GitHub Actions τρέχει τις δοκιμές (Windows και Linux), χτίζει το EXE, το ελέγχει με `selftest` και ανοίγει το παράθυρο.
   Ένα tag `v*` δημιουργεί **δοκιμαστικό** Release (prerelease) με το EXE και το SHA-256.
 - Τοπικά: `pip install -e ".[dev]"` και `pytest`.
+- Χωρίς GitHub Actions: `packaging\build_windows.ps1` στα Windows (δοκιμές, χτίσιμο, αυτοέλεγχος, SHA-256).
 
 ## Εκτός πεδίου (για τώρα)
 
