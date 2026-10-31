@@ -322,3 +322,18 @@ def test_error_notes_are_plain_greek_and_silent(tmp_path, capsys):
         assert "χαλασμένο" in note and "Error" not in note and "Zip" not in note
     cap = capsys.readouterr()
     assert cap.out == "" and cap.err == ""
+
+
+def test_selftest_passes_and_touches_nothing_of_the_user(tmp_path, monkeypatch, capsys):
+    from organotis.selftest import run
+    monkeypatch.chdir(tmp_path)
+    ok, lines = run()
+    assert ok, "\n".join(lines)
+    assert any("αναίρεση" in l for l in lines) and not list(tmp_path.iterdir())
+    assert main(["selftest", "--out", str(tmp_path / "r.txt")]) == 0
+    assert "όλα εντάξει" in (tmp_path / "r.txt").read_text(encoding="utf-8")
+
+
+def test_winconsole_is_noop_off_windows():
+    from organotis import winconsole
+    assert winconsole.attach_if_needed() is False

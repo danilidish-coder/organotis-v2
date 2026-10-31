@@ -43,6 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     un.add_argument("--yes", action="store_true", help="έγκριση χωρίς ερώτηση")
     un.add_argument("--include-modified", action="store_true",
                     help="επιστροφή και αρχείων που άλλαξαν μετά τη μετακίνηση")
+    st = sub.add_parser("selftest", help="αυτοέλεγχος σε προσωρινό φάκελο (δεν αγγίζει τα αρχεία σου)")
+    st.add_argument("--out", help="γράψε και την αναφορά σε αυτό το αρχείο (UTF-8)")
+    st.add_argument("--require-gui", action="store_true", help="αποτυχία αν δεν ανοίγει παράθυρο")
     sub.add_parser("gui", help="γραφικό περιβάλλον")
     return p
 
@@ -53,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd is None or args.cmd == "gui":
         return _gui_or_help(parser, bare=args.cmd is None)
     path = cfgmod.default_config_path()
+    if args.cmd == "selftest":
+        from . import selftest
+        ok, lines = selftest.run(require_gui=args.require_gui)
+        text = "\n".join(lines)
+        print(text)
+        if args.out:
+            Path(args.out).write_text(text + "\n", encoding="utf-8")
+        return 0 if ok else 1
     if args.cmd == "move":
         return _move(args, path)
     if args.cmd == "undo":

@@ -1,0 +1,126 @@
+name: Δοκιμές και EXE
+
+on:
+  push:
+    branches: ["feature/**", "main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Δοκιμές (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Δοκιμές (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest -q
+      - name: Δοκιμές (Linux, με εικονική οθόνη)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb python3-tk
+          xvfb-run -a python -m pytest -q
+
+  build-exe:
+    name: Χτίσιμο EXE (Windows)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-build.txt
+      - run: python -m pip install .
+      - name: Χτίσιμο
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed --name organotis
+          --distpath dist --workpath build/work --specpath build/spec packaging/launcher.py
+      - name: Αυτοέλεγχος του EXE (σάρωση, μετακίνηση, αναίρεση, PDF, παράθυρο)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\organotis.exe -ArgumentList 'selftest','--require-gui','--out','selftest.txt' -Wait -PassThru
+          if (-not (Test-Path selftest.txt)) { throw "Το EXE δεν έγραψε αναφορά αυτοελέγχου (κωδικός $($p.ExitCode))." }
+          Get-Content selftest.txt -Encoding UTF8
+          if ($p.ExitCode -ne 0) { throw "Ο αυτοέλεγχος απέτυχε (κωδικός $($p.ExitCode))." }
+      - name: Έλεγχος εκκίνησης (το παράθυρο ανοίγει και δεν κλείνει μόνο του)
+        shell: pwsh
+        run: |
+          $env:ORGANOTIS_CONFIG = Join-Path $env:RUNNER_TEMP 'smoke-config.json'
+          $p = Start-Process dist\organotis.exe -PassThru
+          Start-Sleep -Seconds 10
+          if ($p.HasExited) { throw "Το EXE έκλεισε μόνο του (κωδικός $($p.ExitCode))." }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "Το παράθυρο άνοιξε και έμεινε ζωντανό."
+      - name: Αποτύπωμα SHA-256
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash dist\organotis.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  organotis.exe" | Out-File -Encoding ascii dist\organotis.exe.sha256
+          Write-Host "SHA-256: $h"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: organotis-windows
+          path: |
+            dist/organotis.exe
+            dist/organotis.exe.sha256
+          if-no-files-found: error
+
+  release:
+    name: Δοκιμαστικό Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-exe
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: organotis-windows
+          path: dist
+      - name: Έλεγχος ότι το tag ταιριάζει με την έκδοση του κώδικα
+        run: |
+          code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/organotis/__init__.py)
+          tag_version="${GITHUB_REF_NAME#v}"; tag_version="${tag_version%%-*}"
+          echo "κώδικας: $code_version, tag: $tag_version"
+          [ "$code_version" = "$tag_version" ] || { echo "Το tag δεν ταιριάζει με την έκδοση του κώδικα"; exit 1; }
+      - name: Δημιουργία Release (δοκιμαστικό, ΟΧΙ εγκεκριμένο)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          sha=$(cut -d' ' -f1 dist/organotis.exe.sha256)
+          cp dist/organotis.exe "dist/organotis-${tag}.exe"
+          echo "$sha  organotis-${tag}.exe" > "dist/organotis-${tag}.exe.sha256"
+          cat > notes.md <<NOTES
+          ## ⚠️ Δοκιμαστική έκδοση: ΔΕΝ είναι εγκεκριμένη
+
+          Μην την εμπιστευτείς για τα πραγματικά σου αρχεία πριν τη δοκιμάσεις.
+          Δοκίμασέ την **πρώτα σε αντίγραφο** ενός φακέλου. Τα βήματα είναι στο
+          [docs/TEST_CHECKLIST.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/TEST_CHECKLIST.md).
+
+          - Commit: \`${GITHUB_SHA}\`
+          - SHA-256 του EXE: \`${sha}\`
+
+          **Windows:** επειδή το αρχείο δεν είναι υπογεγραμμένο, μπορεί να εμφανιστεί
+          προειδοποίηση SmartScreen («Περισσότερες πληροφορίες» και μετά «Εκτέλεση ούτως ή άλλως»),
+          και κάποια antivirus μπορεί να το σημάνουν κατά λάθος. Σύγκρινε το SHA-256 πριν το ανοίξεις.
+          NOTES
+          gh release create "$tag" "dist/organotis-${tag}.exe" "dist/organotis-${tag}.exe.sha256" \
+            --prerelease --title "${tag} (δοκιμαστική, όχι εγκεκριμένη)" --notes-file notes.md --verify-tag
