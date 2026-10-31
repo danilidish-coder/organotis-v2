@@ -5,6 +5,14 @@ from pathlib import Path
 
 from .scanner import Report
 
+CONFIDENCE_LABELS = {"sure": "ΣΙΓΟΥΡΗ", "check": "ΝΑ ΤΗ ΔΕΙΣ"}
+
+
+def confidence_line(p) -> str:
+    label = CONFIDENCE_LABELS.get(p.confidence, "ΝΑ ΤΗ ΔΕΙΣ")
+    return f"{label}, επειδή {p.confidence_why}." if p.confidence_why else f"{label}."
+
+
 KIND_LABELS = {
     "word": "Word", "pdf": "PDF", "excel": "Excel", "image": "Εικόνες",
     "exe": "EXE (δεν ανοίγονται ποτέ)", "other": "Άλλα",
@@ -92,6 +100,8 @@ def format_plan(plan, max_rows: int = 200) -> str:
             out.append(f"  • {_rel(p.entry.path, root)}")
             out.append(f"      → {dest}")
             out.append(f"      Λόγος [{p.rule}]: {p.reason}")
+            if p.action != KEEP:
+                out.append(f"      Βεβαιότητα: {confidence_line(p)}")
         if len(items) > max_rows:
             out.append(f"  … και {len(items) - max_rows} ακόμη.")
 
@@ -102,16 +112,20 @@ def format_plan(plan, max_rows: int = 200) -> str:
 
 
 def format_preview(model, max_rows: int = 500) -> str:
-    """Αριθμημένος πίνακας προεπισκόπησης. Τα ενεργά πρώτα· οι αφαιρεμένες σημειώνονται."""
+    """Αριθμημένος πίνακας προεπισκόπησης, με λόγο και βεβαιότητα σε κάθε γραμμή."""
     root = model.root
-    out = [f"Προεπισκόπηση: {len(model.active)} από {len(model.rows)} γραμμές θα εκτελεστούν."]
+    sure = sum(1 for r in model.active if r.proposal.confidence == "sure")
+    out = [f"Προεπισκόπηση: {len(model.active)} από {len(model.rows)} γραμμές θα εκτελεστούν "
+           f"({sure} σίγουρες, {len(model.active) - sure} «να τις δεις»)."]
     for r in model.rows[:max_rows]:
         p = r.proposal
         mark = "[αφαιρέθηκε] " if r.number in model.removed else ""
         where = "ΦΑΚΕΛΟΣ ΕΛΕΓΧΟΥ" if p.action == "review" else "μετακίνηση"
-        out.append(f"{r.number:>4}. {mark}{_rel(p.entry.path, root)}")
+        label = CONFIDENCE_LABELS.get(p.confidence, "ΝΑ ΤΗ ΔΕΙΣ")
+        out.append(f"{r.number:>4}. {mark}{_rel(p.entry.path, root)}   [{label}]")
         out.append(f"      → {_rel(p.dest, root)}   ({where})")
         out.append(f"      Λόγος [{p.rule}]: {p.reason}")
+        out.append(f"      Βεβαιότητα: {confidence_line(p)}")
     if len(model.rows) > max_rows:
         out.append(f"… και {len(model.rows) - max_rows} ακόμη γραμμές (δεν εμφανίζονται εδώ).")
     return "\n".join(out)
@@ -135,3 +149,11 @@ def format_undo_preview(m, ops, max_rows: int = 200) -> str:
     if len(ops) > max_rows:
         out.append(f"  … και {len(ops) - max_rows} ακόμη.")
     return "\n".join(out)
+
+
+def format_rules(rules: list[dict]) -> str:
+    from .learning import describe_rule
+    if not rules:
+        return "Δεν έχει μάθει κανέναν κανόνα ακόμη."
+    return "Κανόνες που έμαθε το πρόγραμμα από τις διορθώσεις σου:\n" + "\n".join(
+        "  " + describe_rule(r) for r in sorted(rules, key=lambda r: r["id"]))

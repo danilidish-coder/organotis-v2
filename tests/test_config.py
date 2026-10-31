@@ -9,7 +9,7 @@ from organotis.cli import main
 
 
 def test_version():
-    assert __version__ == "0.11.0"
+    assert __version__ == "0.12.0"
 
 
 def test_missing_file_gives_defaults(tmp_path):

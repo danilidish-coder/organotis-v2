@@ -14,7 +14,7 @@ from .approval import PreviewModel
 from .config import Config
 from .extract import extract
 from .mover import execute
-from .planner import build_plan
+from .planner import CHECK, KEEP, SURE, build_plan
 from .scanner import build_report, scan
 from .undo import undo
 
@@ -55,7 +55,7 @@ def run(require_gui: bool = False) -> tuple[bool, list[str]]:
     lines: list[str] = [f"Οργανωτής αρχείων {__version__}: αυτοέλεγχος"]
     ok = True
 
-    def check(name: str, passed: bool, detail: str = "") -> None:
+    def verdict(name: str, passed: bool, detail: str = "") -> None:
         nonlocal ok
         ok = ok and passed
         lines.append(f"{'ΕΝΤΑΞΕΙ' if passed else 'ΑΠΟΤΥΧΙΑ'}  {name}" + (f"  ({detail})" if detail else ""))
@@ -74,23 +74,37 @@ def run(require_gui: bool = False) -> tuple[bool, list[str]]:
         cfg = Config()
 
         txt = extract(root / "stmt.pdf", "pdf", (root / "stmt.pdf").stat().st_size)
-        check("ανάγνωση PDF", "IBAN" in txt.text, txt.note)
+        verdict("ανάγνωση PDF", "IBAN" in txt.text, txt.note)
         txt = extract(root / "scan1.docx", "word", (root / "scan1.docx").stat().st_size)
-        check("ανάγνωση Word", "Εκκαθαριστικό" in txt.text, txt.note)
+        verdict("ανάγνωση Word", "Εκκαθαριστικό" in txt.text, txt.note)
 
         res = scan(root, cfg)
         report = build_report(res)
-        check("σάρωση και διπλότυπα", report.total == 6 and len(report.duplicate_groups) == 1,
+        verdict("σάρωση και διπλότυπα", report.total == 6 and len(report.duplicate_groups) == 1,
               f"{report.total} αρχεία")
         plan = build_plan(res, report, cfg)
         model = PreviewModel(plan)
-        check("πρόταση δομής με λόγους", len(model.rows) == 5 and all(r.proposal.reason for r in model.rows),
+        verdict("πρόταση δομής με λόγους", len(model.rows) == 5 and all(r.proposal.reason for r in model.rows),
               f"{len(model.rows)} προτάσεις")
-        run_ = execute(model.approve(), Path(tmp) / "manifests")
-        check("μετακίνηση με manifest", run_.moved == 5 and not run_.skipped and _snapshot(root) != before,
+        sure = [r for r in model.rows if r.proposal.confidence == SURE]
+        unsure = [r for r in model.rows if r.proposal.confidence == CHECK]
+        verdict("βεβαιότητα «σίγουρη» / «να τη δεις» με εξήγηση",
+              bool(sure) and bool(unsure) and all(r.proposal.confidence_why for r in model.rows),
+              f"{len(sure)} σίγουρες, {len(unsure)} να τις δεις")
+        model.approve_all_sure()
+        verdict("έγκριση μόνο των σίγουρων", len(model.approved_rows) == len(sure)
+              and all(r.proposal.confidence == SURE for r in model.approved_rows))
+        cfg_rule = Config(learned_rules=[{"id": 1, "when": {"type": "name_word", "value": "scan1"},
+                                          "then": {"type": "keep"}, "created": "2000-01-01"}])
+        res_r = scan(root, cfg_rule)
+        p_r = next(p for p in build_plan(res_r, build_report(res_r), cfg_rule).proposals
+                   if p.entry.path.name == "scan1.docx")
+        verdict("μαθημένος κανόνας (μένει στη θέση του)", p_r.action == KEEP and p_r.learned_id == 1)
+        run_ = execute(model.approve_selected(), Path(tmp) / "manifests")
+        verdict("μετακίνηση με manifest", run_.moved == len(sure) and not run_.skipped and _snapshot(root) != before,
               f"{run_.moved} μετακινήσεις")
         res_u = undo(run_.manifest_path)
-        check("αναίρεση από το manifest", res_u.restored == 5 and _snapshot(root) == before,
+        verdict("αναίρεση από το manifest", res_u.restored == len(sure) and _snapshot(root) == before,
               f"{res_u.restored} επιστροφές")
 
     try:
@@ -100,11 +114,11 @@ def run(require_gui: bool = False) -> tuple[bool, list[str]]:
             r = tkinter.Tk()
             r.withdraw()
             r.destroy()
-            check("γραφικό περιβάλλον (tkinter)", True, f"Tk {v}")
+            verdict("γραφικό περιβάλλον (tkinter)", True, f"Tk {v}")
         except Exception as exc:
-            check("γραφικό περιβάλλον (tkinter)", not require_gui, f"δεν άνοιξε παράθυρο: {exc}")
+            verdict("γραφικό περιβάλλον (tkinter)", not require_gui, f"δεν άνοιξε παράθυρο: {exc}")
     except ImportError as exc:
-        check("γραφικό περιβάλλον (tkinter)", not require_gui, f"λείπει: {exc}")
+        verdict("γραφικό περιβάλλον (tkinter)", not require_gui, f"λείπει: {exc}")
 
     lines.append("ΑΠΟΤΕΛΕΣΜΑ: " + ("όλα εντάξει" if ok else "υπάρχουν αποτυχίες"))
     return ok, lines

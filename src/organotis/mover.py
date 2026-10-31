@@ -138,7 +138,7 @@ def execute(approved: ApprovedPlan, manifest_dir: Path,
             w.write({"t": "intent", "i": i, "src": mf.rel_parts(src, root),
                      "dest": mf.rel_parts(dest, root), "size": p.entry.size,
                      "mtime_ns": src.stat().st_mtime_ns, "action": p.action,
-                     "rule": p.rule, "reason": p.reason})
+                     "rule": p.rule, "reason": p.reason, "confidence": p.confidence})
             try:
                 _move_file(src, dest)
             except OSError as exc:

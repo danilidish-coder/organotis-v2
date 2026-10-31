@@ -9,8 +9,9 @@ from pathlib import Path
 
 from . import __version__, config as cfgmod
 from .approval import PreviewModel, parse_numbers
-from .formatting import (format_plan, format_preview, format_report, format_runs,
+from .formatting import (format_plan, format_preview, format_report, format_rules, format_runs,
                          format_undo_preview)
+from . import learning
 from .mover import execute
 from .planner import build_plan
 from .scanner import build_report, scan
@@ -35,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     mv.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, ο πρώτος από τις ρυθμίσεις")
     mv.add_argument("--remove", default="", metavar="ΑΡΙΘΜΟΙ",
                     help="γραμμές που αφαιρούνται από την προεπισκόπηση, π.χ. 1,3,5-7")
+    mv.add_argument("--only-sure", action="store_true",
+                    help="εγκρίνει ΜΟΝΟ τις «σίγουρες» γραμμές· οι «να τις δεις» μένουν στη θέση τους")
     mv.add_argument("--yes", action="store_true",
                     help="έγκριση χωρίς ερώτηση (η προεπισκόπηση τυπώνεται πάντα πρώτα)")
     un = sub.add_parser("undo", help="αναίρεση εκτέλεσης από το manifest (δουλεύει και μετά από επανεκκίνηση)")
@@ -46,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("selftest", help="αυτοέλεγχος σε προσωρινό φάκελο (δεν αγγίζει τα αρχεία σου)")
     st.add_argument("--out", help="γράψε και την αναφορά σε αυτό το αρχείο (UTF-8)")
     st.add_argument("--require-gui", action="store_true", help="αποτυχία αν δεν ανοίγει παράθυρο")
+    rl = sub.add_parser("rules", help="κανόνες που έμαθε το πρόγραμμα από τις διορθώσεις σου")
+    rl.add_argument("action", nargs="?", choices=["list", "remove"], default="list")
+    rl.add_argument("id", nargs="?", type=int, help="αριθμός κανόνα (για remove)")
     sub.add_parser("gui", help="γραφικό περιβάλλον")
     return p
 
@@ -71,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.out:
             Path(args.out).write_text(text + "\n", encoding="utf-8")
         return 0 if ok else 1
+    if args.cmd == "rules":
+        return _rules(args, path)
     if args.cmd == "move":
         return _move(args, path)
     if args.cmd == "undo":
@@ -147,8 +155,12 @@ def _move(args, config_path: Path) -> int:
     except ValueError as exc:
         print(f"Σφάλμα: {exc}", file=sys.stderr)
         return 2
+    if args.only_sure:
+        model.remove([r.number for r in model.check_rows])
     interactive = sys.stdin.isatty() and not args.yes
     print(format_preview(model))
+    if args.only_sure:
+        print(f"\n(--only-sure: οι {len(model.check_rows)} γραμμές «ΝΑ ΤΗ ΔΕΙΣ» δεν θα μετακινηθούν.)")
     if interactive:
         try:
             while True:
@@ -156,11 +168,13 @@ def _move(args, config_path: Path) -> int:
                 if not ans:
                     break
                 try:
-                    model.remove(parse_numbers(ans))
+                    nums = parse_numbers(ans)
+                    model.remove(nums)
                 except ValueError as exc:
                     print(exc)
                     continue
                 print(f"Έμειναν {len(model.active)} από {len(model.rows)} γραμμές.")
+                _offer_rules(model, nums, cfg, config_path)
             if not model.active:
                 print("Δεν έμεινε τίποτα. Δεν μετακινήθηκε τίποτα.")
                 return 0
@@ -248,3 +262,52 @@ def _undo(args, config_path: Path) -> int:
     if res.skipped:
         print("Όσα παραλείφθηκαν μπορείς να τα ξαναδοκιμάσεις αργότερα με την ίδια εντολή.")
     return 0 if not res.skipped else 3
+
+
+def _offer_rules(model: PreviewModel, numbers: list[int], cfg: cfgmod.Config, config_path: Path) -> None:
+    """Μετά την αφαίρεση γραμμών: «να το κάνω κανόνα;» (μόνο τοπικά, στο αρχείο ρυθμίσεων)."""
+    for n in numbers:
+        row = next(r for r in model.rows if r.number == n)
+        conds = learning.suggest_conditions(row.proposal.entry.path, model.root)
+        if not conds:
+            continue
+        print(f"\nΑφαίρεσες το «{row.proposal.entry.path.name}». Να γίνει κανόνας ώστε τέτοια αρχεία να μένουν στη θέση τους;")
+        for i, c in enumerate(conds, 1):
+            print(f"  {i}) {c.label}")
+        try:
+            ans = input("Γράψε αριθμό, ή Enter για «όχι, μόνο αυτή τη φορά»: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not ans.isdigit() or not 1 <= int(ans) <= len(conds):
+            continue
+        c = conds[int(ans) - 1]
+        when, then = {"type": c.type, "value": c.value}, {"type": "keep"}
+        if learning.has_rule(cfg.learned_rules, when, then):
+            print("Αυτός ο κανόνας υπάρχει ήδη.")
+            continue
+        rule = learning.new_rule(cfg.learned_rules, when, then)
+        cfg.learned_rules.append(rule)
+        cfgmod.save(cfg, config_path)
+        print("Αποθηκεύτηκε: " + learning.describe_rule(rule))
+
+
+def _rules(args, config_path: Path) -> int:
+    try:
+        cfg = cfgmod.load(config_path)
+    except cfgmod.ConfigError as exc:
+        print(f"Σφάλμα ρυθμίσεων: {exc}", file=sys.stderr)
+        return 2
+    if args.action == "remove":
+        if args.id is None:
+            print("Γράψε τον αριθμό του κανόνα, π.χ.: organotis rules remove 2", file=sys.stderr)
+            return 2
+        match = [r for r in cfg.learned_rules if r["id"] == args.id]
+        if not match:
+            print(f"Δεν υπάρχει κανόνας #{args.id}.", file=sys.stderr)
+            return 2
+        cfg.learned_rules = [r for r in cfg.learned_rules if r["id"] != args.id]
+        cfgmod.save(cfg, config_path)
+        print("Διαγράφηκε ο κανόνας: " + learning.describe_rule(match[0]))
+        return 0
+    print(format_rules(cfg.learned_rules))
+    return 0

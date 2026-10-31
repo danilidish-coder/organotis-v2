@@ -82,6 +82,8 @@ class Config:
     images_folder: str = "Εικόνες"
     programs_folder: str = "Προγράμματα"
     duplicates_subfolder: str = "Διπλότυπα"
+    # Κανόνες που έμαθε το πρόγραμμα από τις διορθώσεις σου (βλ. learning.py). Μόνο τοπικά.
+    learned_rules: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -112,6 +114,17 @@ class Config:
                     "Κάθε κανόνας θέματος χρειάζεται «topic» (απλό όνομα φακέλου) "
                     "και μη κενή λίστα «keywords»."
                 )
+        if not isinstance(self.learned_rules, list):
+            raise ConfigError("Το «learned_rules» πρέπει να είναι λίστα.")
+        from .learning import validate_rule
+        ids: set[int] = set()
+        for rule in self.learned_rules:
+            err = validate_rule(rule, _is_simple_name)
+            if err:
+                raise ConfigError(err)
+            if rule["id"] in ids:
+                raise ConfigError(f"Δύο μαθημένοι κανόνες έχουν το ίδιο «id» ({rule['id']}).")
+            ids.add(rule["id"])
         if not isinstance(self.manifest_dir, str):
             raise ConfigError("Το «manifest_dir» πρέπει να είναι κείμενο.")
         if not isinstance(self.extensions, dict):
