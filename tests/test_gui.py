@@ -19,9 +19,21 @@ if sys.platform != "win32" and not os.environ.get("DISPLAY"):
 from organotis import gui  # noqa: E402
 
 
+def _new_tk():
+    """Τα Windows runners του CI αποτυγχάνουν σπάνια να φορτώσουν το init.tcl· δοκιμάζουμε ξανά."""
+    last = None
+    for _ in range(4):
+        try:
+            return tk.Tk()
+        except tk.TclError as exc:
+            last = exc
+            time.sleep(1)
+    raise last
+
+
 @pytest.fixture
 def app(tmp_path):
-    root = tk.Tk()
+    root = _new_tk()
     cfgp = tmp_path / "cfg" / "c.json"
     a = gui.App(root, cfgp)
     yield a

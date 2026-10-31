@@ -90,20 +90,22 @@ def test_undo_is_idempotent(tree, mdir):
 
 def test_survives_real_restart_via_cli_processes(tree, tmp_path):
     """Μετακίνηση σε μία διεργασία, αναίρεση σε άλλη, με μόνο το manifest στον δίσκο."""
-    env = {**os.environ, cfgmod.ENV_CONFIG: str(tmp_path / "cfg" / "c.json")}
+    # UTF-8 ρητά: σε Windows με αγγλική κωδικοσελίδα (π.χ. στο CI) τα ελληνικά σε pipe θα γίνονταν «?».
+    env = {**os.environ, cfgmod.ENV_CONFIG: str(tmp_path / "cfg" / "c.json"), "PYTHONUTF8": "1"}
+
+    def cli(*args):
+        return subprocess.run([sys.executable, "-m", "organotis", *args], env=env,
+                              capture_output=True, text=True, encoding="utf-8")
+
     before = snap(tree)
-    r1 = subprocess.run([sys.executable, "-m", "organotis", "move", str(tree), "--yes"],
-                        env=env, capture_output=True, text=True)
+    r1 = cli("move", str(tree), "--yes")
     assert r1.returncode == 0, r1.stderr
     assert snap(tree) != before
-    r2 = subprocess.run([sys.executable, "-m", "organotis", "undo"], env=env, capture_output=True, text=True)
-    assert "εφαρμόστηκε" in r2.stdout
-    r3 = subprocess.run([sys.executable, "-m", "organotis", "undo", "--last", "--yes"],
-                        env=env, capture_output=True, text=True)
+    assert "εφαρμόστηκε" in cli("undo").stdout
+    r3 = cli("undo", "--last", "--yes")
     assert r3.returncode == 0, r3.stderr + r3.stdout
     assert snap(tree) == before
-    r4 = subprocess.run([sys.executable, "-m", "organotis", "undo"], env=env, capture_output=True, text=True)
-    assert "αναιρέθηκε" in r4.stdout
+    assert "αναιρέθηκε" in cli("undo").stdout
 
 
 def test_same_names_round_trip(tmp_path, mdir):
