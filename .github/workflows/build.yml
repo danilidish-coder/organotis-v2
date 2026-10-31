@@ -110,7 +110,11 @@ jobs:
 
   release:
     name: Δοκιμαστικό Release
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    # Δημιουργείται: με tag v*, με το κουμπί «Run workflow» + tag, ή με push που έχει «[release]» στο μήνυμα.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
     needs: build-exe
     runs-on: ubuntu-latest
     permissions:
@@ -121,25 +125,30 @@ jobs:
         with:
           name: organotis-windows
           path: dist
-      - name: Έλεγχος ότι το tag ταιριάζει με την έκδοση του κώδικα
+      - name: Καθορισμός tag και έλεγχος ότι ταιριάζει με την έκδοση του κώδικα
         env:
           INPUT_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
-          case "$tag" in v[0-9]*) ;; *) echo "Το tag πρέπει να ξεκινά με v και αριθμό, π.χ. v0.11.0-test1"; exit 1;; esac
           code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/organotis/__init__.py)
+          if [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"
+          else tag="v${code_version}-test${GITHUB_RUN_NUMBER}"   # μοναδικό ανά εκτέλεση, δεν αντικαθίσταται ποτέ παλιό Release
+          fi
+          case "$tag" in v[0-9]*) ;; *) echo "Το tag πρέπει να ξεκινά με v και αριθμό, π.χ. v0.11.0-test1"; exit 1;; esac
           tag_version="${tag#v}"; tag_version="${tag_version%%-*}"
-          echo "κώδικας: $code_version, tag: $tag_version"
+          echo "κώδικας: $code_version, tag: $tag"
           [ "$code_version" = "$tag_version" ] || { echo "Το tag δεν ταιριάζει με την έκδοση του κώδικα"; exit 1; }
+          if gh release view "$tag" >/dev/null 2>&1; then echo "Υπάρχει ήδη Release $tag, δεν αντικαθίσταται"; exit 1; fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
       - name: Δημιουργία Release (δοκιμαστικό, ΟΧΙ εγκεκριμένο)
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_TAG: ${{ inputs.release_tag }}
         run: |
-          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          tag="$TAG"
           sha=$(cut -d' ' -f1 dist/organotis.exe.sha256)
-          cp dist/organotis.exe "dist/organotis-${tag}.exe"
-          echo "$sha  organotis-${tag}.exe" > "dist/organotis-${tag}.exe.sha256"
+          cp dist/organotis.exe "dist/Organotis_${tag}.exe"
+          echo "Organotis_${tag}.exe  SHA256=${sha}" > dist/SHA256.txt
           cat > notes.md <<NOTES
           ## ⚠️ Δοκιμαστική έκδοση: ΔΕΝ είναι εγκεκριμένη
 
@@ -154,5 +163,5 @@ jobs:
           προειδοποίηση SmartScreen («Περισσότερες πληροφορίες» και μετά «Εκτέλεση ούτως ή άλλως»),
           και κάποια antivirus μπορεί να το σημάνουν κατά λάθος. Σύγκρινε το SHA-256 πριν το ανοίξεις.
           NOTES
-          gh release create "$tag" "dist/organotis-${tag}.exe" "dist/organotis-${tag}.exe.sha256" \
+          gh release create "$tag" "dist/Organotis_${tag}.exe" dist/SHA256.txt \
             --prerelease --title "${tag} (δοκιμαστική, όχι εγκεκριμένη)" --notes-file notes.md --target "$GITHUB_SHA"
