@@ -24,6 +24,7 @@ class Entry:
     size: int
     kind: str  # κατηγορία από τις ρυθμίσεις ή "other"
     ext: str
+    mtime_ns: int = 0  # για έλεγχο ότι το αρχείο δεν άλλαξε μετά τη σάρωση
 
 
 @dataclass
@@ -87,12 +88,13 @@ def scan(root: Path, cfg: Config) -> ScanResult:
                 res.skipped_links += 1
                 continue
             try:
-                size = p.stat().st_size
+                st = p.stat()
+                size = st.st_size
             except OSError as exc:
                 res.problems.append(Problem(p, f"Δεν διαβάζονται τα στοιχεία του αρχείου ({exc.strerror})."))
                 continue
             ext = os.path.splitext(name)[1].lower()
-            res.entries.append(Entry(p, size, cfg.kind_of(name) or "other", ext))
+            res.entries.append(Entry(p, size, cfg.kind_of(name) or "other", ext, st.st_mtime_ns))
     return res
 
 

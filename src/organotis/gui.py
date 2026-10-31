@@ -1,0 +1,227 @@
+"""Γραφικό περιβάλλον (tkinter): προεπισκόπηση με αφαίρεση γραμμών και μετακίνηση.
+
+Η λογική βρίσκεται στο PreviewModel και στον μεταφορέα· εδώ είναι μόνο η οθόνη.
+Η σάρωση και η μετακίνηση τρέχουν σε νήμα, ώστε το παράθυρο να μην παγώνει.
+"""
+from __future__ import annotations
+
+import queue
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+from . import __version__, config as cfgmod
+from .approval import PreviewModel
+from .mover import execute
+from .planner import build_plan
+from .scanner import build_report, scan
+
+
+class App:
+    def __init__(self, root: tk.Tk, config_path: Path | None = None):
+        self.root = root
+        self.config_path = config_path or cfgmod.default_config_path()
+        self.cfg = cfgmod.load(self.config_path)
+        self.model: PreviewModel | None = None
+        self.q: queue.Queue = queue.Queue()
+        self.stop = threading.Event()
+        self.busy = False
+
+        root.title(f"Οργανωτής αρχείων {__version__} (δοκιμαστική έκδοση)")
+        root.geometry("1100x620")
+
+        top = ttk.Frame(root, padding=8)
+        top.pack(fill="x")
+        ttk.Label(top, text="Φάκελος:").pack(side="left")
+        self.folder = tk.StringVar(value=self.cfg.scan_roots[0] if self.cfg.scan_roots else "")
+        ttk.Entry(top, textvariable=self.folder, width=60).pack(side="left", padx=6, fill="x", expand=True)
+        ttk.Button(top, text="Επιλογή…", command=self.choose).pack(side="left")
+        self.btn_scan = ttk.Button(top, text="Σάρωση και πρόταση", command=self.start_scan)
+        self.btn_scan.pack(side="left", padx=6)
+
+        cols = ("n", "action", "src", "dest", "reason")
+        frame = ttk.Frame(root, padding=(8, 0))
+        frame.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+        for c, title, w in (("n", "Αρ.", 45), ("action", "Ενέργεια", 190), ("src", "Από", 260),
+                            ("dest", "Προς", 300), ("reason", "Λόγος", 700)):
+            self.tree.heading(c, text=title)
+            self.tree.column(c, width=w, anchor="w", stretch=(c == "reason"))
+        ys = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        xs = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        ys.grid(row=0, column=1, sticky="ns")
+        xs.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        self.tree.tag_configure("removed", foreground="#888888")
+        self.tree.bind("<<TreeviewSelect>>", self.show_detail)
+        self.tree.bind("<Delete>", lambda e: self.remove_selected())
+
+        self.detail = tk.Text(root, height=4, wrap="word", state="disabled")
+        self.detail.pack(fill="x", padx=8, pady=(6, 0))
+
+        bar = ttk.Frame(root, padding=8)
+        bar.pack(fill="x")
+        self.btn_remove = ttk.Button(bar, text="Αφαίρεση επιλεγμένων (Delete)", command=self.remove_selected)
+        self.btn_remove.pack(side="left")
+        self.btn_restore = ttk.Button(bar, text="Επαναφορά επιλεγμένων", command=self.restore_selected)
+        self.btn_restore.pack(side="left", padx=6)
+        self.btn_cancel = ttk.Button(bar, text="Διακοπή", command=self.stop.set, state="disabled")
+        self.btn_cancel.pack(side="right")
+        self.btn_go = ttk.Button(bar, text="Μετακίνηση εγκεκριμένων…", command=self.confirm_and_move, state="disabled")
+        self.btn_go.pack(side="right", padx=6)
+        self.status = tk.StringVar(value="Διάλεξε φάκελο και πάτα «Σάρωση και πρόταση». Δεν μετακινείται τίποτα πριν την έγκρισή σου.")
+        ttk.Label(root, textvariable=self.status, padding=(8, 0, 8, 8)).pack(fill="x")
+        root.after(100, self.poll)
+
+    # ---- ενέργειες ----
+    def choose(self) -> None:
+        d = filedialog.askdirectory(title="Φάκελος προς σάρωση")
+        if d:
+            self.folder.set(d)
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        self.btn_scan.configure(state="disabled" if busy else "normal")
+        self.btn_cancel.configure(state="normal" if busy else "disabled")
+        self.refresh_buttons()
+
+    def start_scan(self) -> None:
+        folder = self.folder.get().strip()
+        if not folder or self.busy:
+            return
+        self.set_busy(True)
+        self.status.set("Σάρωση… (μόνο ανάγνωση)")
+
+        def work() -> None:
+            try:
+                res = scan(Path(folder).expanduser(), self.cfg)
+                self.q.put(("plan", build_plan(res, build_report(res), self.cfg)))
+            except Exception as exc:  # εμφανίζεται στον χρήστη, δεν κρύβεται
+                self.q.put(("error", f"Η σάρωση απέτυχε: {exc}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def load_plan(self, plan) -> None:
+        self.model = PreviewModel(plan)
+        self.render()
+        n = len(self.model.rows)
+        self.status.set(f"{n} προτάσεις. Αφαίρεσε όσες δεν θέλεις και πάτα «Μετακίνηση εγκεκριμένων…»."
+                        if n else "Δεν υπάρχει τίποτα να μετακινηθεί: όλα μένουν στη θέση τους.")
+
+    def render(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        if not self.model:
+            return
+        root = self.model.root
+        for r in self.model.rows:
+            p = r.proposal
+            action = "Φάκελος ελέγχου" if p.action == "review" else "Μετακίνηση"
+            tags = ("removed",) if r.number in self.model.removed else ()
+            def rel(x: Path) -> str:
+                try:
+                    return str(x.relative_to(root))
+                except ValueError:
+                    return str(x)
+            self.tree.insert("", "end", iid=str(r.number), tags=tags, values=(
+                r.number, action + (" (αφαιρέθηκε)" if tags else ""),
+                rel(p.entry.path), rel(p.dest), f"[{p.rule}] {p.reason}"))
+        self.refresh_buttons()
+
+    def selected_numbers(self) -> list[int]:
+        return [int(i) for i in self.tree.selection()]
+
+    def remove_selected(self) -> None:
+        if self.model and not self.busy:
+            self.model.remove(self.selected_numbers())
+            self.render()
+
+    def restore_selected(self) -> None:
+        if self.model and not self.busy:
+            self.model.restore(self.selected_numbers())
+            self.render()
+
+    def refresh_buttons(self) -> None:
+        can = bool(self.model and self.model.active) and not self.busy
+        self.btn_go.configure(state="normal" if can else "disabled")
+        if self.model:
+            self.btn_go.configure(text=f"Μετακίνηση εγκεκριμένων ({len(self.model.active)})…")
+
+    def show_detail(self, _evt=None) -> None:
+        sel = self.selected_numbers()
+        self.detail.configure(state="normal")
+        self.detail.delete("1.0", "end")
+        if self.model and sel:
+            p = next(r.proposal for r in self.model.rows if r.number == sel[0])
+            self.detail.insert("1.0", f"Λόγος [{p.rule}]\n{p.reason}")
+        self.detail.configure(state="disabled")
+
+    def confirm_and_move(self) -> None:
+        if not self.model or self.busy:
+            return
+        active = self.model.active
+        reviews = sum(1 for r in active if r.proposal.action == "review")
+        if not messagebox.askyesno(
+                "Έγκριση μετακίνησης",
+                f"Θα μετακινηθούν {len(active)} αρχεία ({reviews} στον φάκελο ελέγχου).\n"
+                "Δεν διαγράφεται τίποτα και θα γραφτεί manifest για αναίρεση.\n\nΣυνέχεια;"):
+            return
+        approved = self.model.approve()
+        self.stop.clear()
+        self.set_busy(True)
+        mdir = self.cfg.manifest_path(self.config_path)
+
+        def work() -> None:
+            try:
+                res = execute(approved, mdir, should_stop=self.stop.is_set,
+                              progress=lambda i, n, p: self.q.put(("progress", (i, n))))
+                self.q.put(("done", res))
+            except Exception as exc:
+                self.q.put(("error", f"Η μετακίνηση σταμάτησε: {exc}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- ουρά μηνυμάτων από τα νήματα ----
+    def poll(self) -> None:
+        try:
+            while True:
+                kind, data = self.q.get_nowait()
+                if kind == "plan":
+                    self.set_busy(False)
+                    self.load_plan(data)
+                elif kind == "progress":
+                    self.status.set(f"Μετακίνηση {data[0]} από {data[1]}…")
+                elif kind == "done":
+                    self.set_busy(False)
+                    self.finish(data)
+                elif kind == "error":
+                    self.set_busy(False)
+                    self.status.set(data)
+                    messagebox.showerror("Σφάλμα", data)
+        except queue.Empty:
+            pass
+        self.root.after(100, self.poll)
+
+    def finish(self, res) -> None:
+        msg = f"Μετακινήθηκαν {res.moved}, παραλείφθηκαν {len(res.skipped)}."
+        if res.status == "stopped":
+            msg += " (Διακόπηκε από εσένα.)"
+        if res.skipped:
+            msg += "\n\nΠαραλείφθηκαν:\n" + "\n".join(
+                f"• {p.entry.path.name}: {why}" for p, why in res.skipped[:15])
+        self.status.set(msg.split("\n")[0] + f"  Manifest: {res.manifest_path}")
+        self.model = None
+        self.render()
+        messagebox.showinfo("Τέλος", msg + f"\n\nManifest (για αναίρεση):\n{res.manifest_path}")
+
+
+def run() -> int:
+    root = tk.Tk()
+    try:
+        App(root)
+    except cfgmod.ConfigError as exc:
+        messagebox.showerror("Σφάλμα ρυθμίσεων", str(exc))
+        return 2
+    root.mainloop()
+    return 0

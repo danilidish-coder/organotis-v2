@@ -99,3 +99,19 @@ def format_plan(plan, max_rows: int = 200) -> str:
     block("Στον φάκελο ελέγχου (διπλότυπα, καμία διαγραφή):", reviews)
     block("Μένουν στη θέση τους:", keeps)
     return "\n".join(out)
+
+
+def format_preview(model, max_rows: int = 500) -> str:
+    """Αριθμημένος πίνακας προεπισκόπησης. Τα ενεργά πρώτα· οι αφαιρεμένες σημειώνονται."""
+    root = model.root
+    out = [f"Προεπισκόπηση: {len(model.active)} από {len(model.rows)} γραμμές θα εκτελεστούν."]
+    for r in model.rows[:max_rows]:
+        p = r.proposal
+        mark = "[αφαιρέθηκε] " if r.number in model.removed else ""
+        where = "ΦΑΚΕΛΟΣ ΕΛΕΓΧΟΥ" if p.action == "review" else "μετακίνηση"
+        out.append(f"{r.number:>4}. {mark}{_rel(p.entry.path, root)}")
+        out.append(f"      → {_rel(p.dest, root)}   ({where})")
+        out.append(f"      Λόγος [{p.rule}]: {p.reason}")
+    if len(model.rows) > max_rows:
+        out.append(f"… και {len(model.rows) - max_rows} ακόμη γραμμές (δεν εμφανίζονται εδώ).")
+    return "\n".join(out)
