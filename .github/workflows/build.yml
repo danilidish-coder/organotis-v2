@@ -27,7 +27,19 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - name: Δοκιμές (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest -q
+        shell: pwsh
+        run: |
+          # Η έξοδος γράφεται και ως σχόλιο-σφάλμα, ώστε να διαβάζεται και χωρίς λήψη των logs.
+          python -m pytest -q --tb=short -rf *> pytest-out.txt
+          $code = $LASTEXITCODE
+          Get-Content pytest-out.txt -Encoding UTF8 | Select-Object -Last 60
+          if ($code -ne 0) {
+            $txt = Get-Content pytest-out.txt -Raw -Encoding UTF8
+            if ($txt.Length -gt 14000) { $txt = $txt.Substring($txt.Length - 14000) }
+            $txt = $txt.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Host "::error title=pytest::$txt"
+            exit $code
+          }
       - name: Δοκιμές (Linux, με εικονική οθόνη)
         if: runner.os == 'Linux'
         run: |
@@ -55,16 +67,26 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process dist\organotis.exe -ArgumentList 'selftest','--require-gui','--out','selftest.txt' -Wait -PassThru
-          if (-not (Test-Path selftest.txt)) { throw "Το EXE δεν έγραψε αναφορά αυτοελέγχου (κωδικός $($p.ExitCode))." }
+          if (-not (Test-Path selftest.txt)) {
+            Write-Host "::error title=selftest::Το EXE δεν έγραψε αναφορά αυτοελέγχου (κωδικός $($p.ExitCode))."
+            throw "Το EXE δεν έγραψε αναφορά αυτοελέγχου."
+          }
           Get-Content selftest.txt -Encoding UTF8
-          if ($p.ExitCode -ne 0) { throw "Ο αυτοέλεγχος απέτυχε (κωδικός $($p.ExitCode))." }
+          if ($p.ExitCode -ne 0) {
+            $txt = (Get-Content selftest.txt -Raw -Encoding UTF8).Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Host "::error title=selftest::$txt"
+            throw "Ο αυτοέλεγχος απέτυχε (κωδικός $($p.ExitCode))."
+          }
       - name: Έλεγχος εκκίνησης (το παράθυρο ανοίγει και δεν κλείνει μόνο του)
         shell: pwsh
         run: |
           $env:ORGANOTIS_CONFIG = Join-Path $env:RUNNER_TEMP 'smoke-config.json'
           $p = Start-Process dist\organotis.exe -PassThru
           Start-Sleep -Seconds 10
-          if ($p.HasExited) { throw "Το EXE έκλεισε μόνο του (κωδικός $($p.ExitCode))." }
+          if ($p.HasExited) {
+            Write-Host "::error title=startup::Το EXE έκλεισε μόνο του (κωδικός $($p.ExitCode))."
+            throw "Το EXE έκλεισε μόνο του."
+          }
           Stop-Process -Id $p.Id -Force
           Write-Host "Το παράθυρο άνοιξε και έμεινε ζωντανό."
       - name: Αποτύπωμα SHA-256
