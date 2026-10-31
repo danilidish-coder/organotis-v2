@@ -51,6 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Σε ελληνικά Windows η κονσόλα δεν δέχεται όλους τους χαρακτήρες (π.χ. «→»).
+    # Αντί να σπάσει το πρόγραμμα, αντικαθιστά τους μη εμφανίσιμους χαρακτήρες.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.cmd is None or args.cmd == "gui":

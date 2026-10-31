@@ -130,7 +130,9 @@ def test_manifest_contents(tree, mdir):
     assert ["Έγγραφα"] in m.dirs and ["Έγγραφα", "Φορολογικά"] in m.dirs
     # σχετικές διαδρομές: καμία σταθερή διαδρομή μέσα στο manifest εκτός από το root της κεφαλίδας
     text = res.manifest_path.read_text(encoding="utf-8")
-    assert text.count(str(tree)) == 1
+    # Στο αρχείο η διαδρομή είναι JSON-escaped (τα \ γράφονται ως \\ στα Windows).
+    import json as _json
+    assert text.count(_json.dumps(str(tree), ensure_ascii=False)[1:-1]) == 1
 
 
 def test_manifest_survives_reload_from_disk(tree, mdir):
