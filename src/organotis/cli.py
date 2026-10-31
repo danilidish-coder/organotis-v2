@@ -5,7 +5,11 @@ import argparse
 import json
 import sys
 
+from pathlib import Path
+
 from . import __version__, config as cfgmod
+from .formatting import format_report
+from .scanner import build_report, scan
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,16 +21,33 @@ def build_parser() -> argparse.ArgumentParser:
     csub.add_parser("path", help="πού βρίσκεται το αρχείο ρυθμίσεων")
     csub.add_parser("show", help="εμφάνιση τρεχουσών ρυθμίσεων")
     csub.add_parser("init", help="δημιουργία αρχείου ρυθμίσεων (δεν αντικαθιστά υπάρχον)")
+    s = sub.add_parser("scan", help="σάρωση φακέλου και αναφορά (μόνο ανάγνωση)")
+    s.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, οι φάκελοι από τις ρυθμίσεις")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.cmd != "config":
+    if args.cmd not in ("config", "scan"):
         parser.print_help()
         return 0
     path = cfgmod.default_config_path()
+    if args.cmd == "scan":
+        try:
+            cfg = cfgmod.load(path)
+        except cfgmod.ConfigError as exc:
+            print(f"Σφάλμα ρυθμίσεων: {exc}", file=sys.stderr)
+            return 2
+        roots = [args.folder] if args.folder else cfg.scan_roots
+        if not roots:
+            print("Δεν δόθηκε φάκελος και δεν υπάρχουν φάκελοι σάρωσης στις ρυθμίσεις.", file=sys.stderr)
+            return 2
+        for i, root in enumerate(roots):
+            if i:
+                print("\n" + "=" * 60 + "\n")
+            print(format_report(build_report(scan(Path(root).expanduser(), cfg))))
+        return 0
     try:
         if args.config_cmd == "path":
             print(path)
