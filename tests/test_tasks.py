@@ -153,3 +153,26 @@ def test_plan_cli_tasks_selection(tmp_path, monkeypatch, capsys):
     make_docx(tmp_path / "r" / "ΔΕΗ 2023.docx", "ΔΕΗ ρεύμα")
     assert main(["plan", str(tmp_path / "r"), "--tasks", "duplicates"]) == 0
     capsys.readouterr()
+
+
+def test_plan_report_shows_kept_and_moved_same_names(tmp_path, monkeypatch, capsys):
+    from organotis.formatting import format_plan
+    make_docx(tmp_path / "a" / "N.docx", "ένα")
+    make_docx(tmp_path / "b" / "c" / "N.docx", "δύο διαφορετικό")
+    text = format_plan(plan_for(tmp_path, tasks=("same_names",)))
+    assert "ΚΡΑΤΙΕΤΑΙ  a/N.docx" in text
+    assert "ΣΤΟΝ ΕΛΕΓΧΟ b/c/N.docx" in text and "Ίδια ονόματα" in text and "Λόγος:" in text
+
+
+def test_same_name_same_content_is_duplicate_not_same_name(tmp_path):
+    write(tmp_path / "a" / "N.txt", b"same")
+    write(tmp_path / "b" / "c" / "N.txt", b"same")
+    plan = plan_for(tmp_path, tasks=("duplicates", "same_names"))
+    assert [p.rule for p in plan.by_action(REVIEW)] == ["διπλότυπο"]
+
+
+def test_same_name_same_content_untouched_without_duplicates(tmp_path):
+    write(tmp_path / "a" / "N.txt", b"same")
+    write(tmp_path / "b" / "c" / "N.txt", b"same")
+    plan = plan_for(tmp_path, tasks=("same_names",))
+    assert plan.by_action(REVIEW) == [] and plan.by_action(MOVE) == []

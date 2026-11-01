@@ -76,12 +76,19 @@ def format_plan(plan, max_rows: int = 200) -> str:
     from .planner import KEEP, MOVE, REVIEW
 
     root = plan.root
-    moves, reviews, keeps = plan.by_action(MOVE), plan.by_action(REVIEW), plan.by_action(KEEP)
+    moves, keeps = plan.by_action(MOVE), plan.by_action(KEEP)
+    reviews = [p for p in plan.by_action(REVIEW) if p.rule != "ίδιο όνομα"]
+    same_moved = [p for p in plan.by_action(REVIEW) if p.rule == "ίδιο όνομα"]
+    same_kept = [p for p in keeps if p.rule == "ίδιο όνομα"]
+    keeps = [p for p in keeps if p.rule != "ίδιο όνομα"]
     out = [f"Πρόταση δομής για: {root}",
            "(Μόνο πρόταση: δεν μετακινήθηκε ούτε άλλαξε τίποτα. Κάθε γραμμή έχει τον λόγο της.)",
            "",
            f"Προτείνονται {len(moves)} μετακινήσεις, {len(reviews)} αρχεία στον φάκελο ελέγχου "
-           f"(διπλότυπα), {len(keeps)} μένουν στη θέση τους."]
+           f"(διπλότυπα), {len(keeps) + len(same_kept)} μένουν στη θέση τους."]
+    if same_moved:
+        out[-1] += (f" Ίδια ονόματα: {len(same_kept)} κρατήθηκαν, "
+                    f"{len(same_moved)} πάνε στον φάκελο ελέγχου.")
 
     def block(title: str, items: list) -> None:
         if not items:
@@ -97,6 +104,19 @@ def format_plan(plan, max_rows: int = 200) -> str:
 
     block("Μετακινήσεις:", moves)
     block("Στον φάκελο ελέγχου (διπλότυπα, καμία διαγραφή):", reviews)
+    if same_moved:
+        out.extend(["", "Ίδια ονόματα (διαφορετικό περιεχόμενο): τι κρατήθηκε και τι πάει στον φάκελο ελέγχου:"])
+        groups: dict[str, list] = {}
+        for p in same_kept + same_moved:
+            groups.setdefault(p.entry.path.name.casefold(), []).append(p)
+        for items in list(groups.values())[:max_rows]:
+            out.append(f"  • {items[0].entry.path.name}")
+            for p in items:
+                if p.action == KEEP:
+                    out.append(f"      ΚΡΑΤΙΕΤΑΙ  {_rel(p.entry.path, root)}")
+                else:
+                    out.append(f"      ΣΤΟΝ ΕΛΕΓΧΟ {_rel(p.entry.path, root)}  → {_rel(p.dest, root)}")
+                    out.append(f"          Λόγος: {p.reason}")
     block("Μένουν στη θέση τους:", keeps)
     return "\n".join(out)
 
