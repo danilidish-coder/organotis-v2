@@ -160,8 +160,8 @@ def test_plan_report_shows_kept_and_moved_same_names(tmp_path, monkeypatch, caps
     make_docx(tmp_path / "a" / "N.docx", "ένα")
     make_docx(tmp_path / "b" / "c" / "N.docx", "δύο διαφορετικό")
     text = format_plan(plan_for(tmp_path, tasks=("same_names",)))
-    assert "ΚΡΑΤΙΕΤΑΙ  a/N.docx" in text
-    assert "ΣΤΟΝ ΕΛΕΓΧΟ b/c/N.docx" in text and "Ίδια ονόματα" in text and "Λόγος:" in text
+    assert "ΚΡΑΤΙΕΤΑΙ  " + str(Path("a") / "N.docx") in text
+    assert "ΣΤΟΝ ΕΛΕΓΧΟ " + str(Path("b") / "c" / "N.docx") in text and "Ίδια ονόματα" in text and "Λόγος:" in text
 
 
 def test_same_name_same_content_is_duplicate_not_same_name(tmp_path):
