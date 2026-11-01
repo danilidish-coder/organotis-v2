@@ -12,7 +12,7 @@ from .approval import PreviewModel, parse_numbers
 from .formatting import (format_plan, format_preview, format_report, format_runs,
                          format_undo_preview)
 from .mover import execute
-from .planner import build_plan
+from .planner import TASKS, build_plan, check_tasks
 from .scanner import build_report, scan
 from .undo import list_runs, pending_ops, undo as run_undo
 from . import manifest as mfmod
@@ -31,12 +31,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, οι φάκελοι από τις ρυθμίσεις")
     pl = sub.add_parser("plan", help="πρόταση δομής με ορατούς κανόνες (δεν μετακινεί τίποτα)")
     pl.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, οι φάκελοι από τις ρυθμίσεις")
+    pl.add_argument("--tasks", default=",".join(TASKS), metavar="ΕΡΓΑΣΙΕΣ",
+                    help="εργασίες που εκτελούνται, χωρισμένες με κόμμα (προεπιλογή: "
+                         + ",".join(TASKS) + ")")
     mv = sub.add_parser("move", help="προεπισκόπηση και μετακίνηση με manifest (ζητά έγκριση)")
     mv.add_argument("folder", nargs="?", help="φάκελος· αν λείπει, ο πρώτος από τις ρυθμίσεις")
     mv.add_argument("--remove", default="", metavar="ΑΡΙΘΜΟΙ",
                     help="γραμμές που αφαιρούνται από την προεπισκόπηση, π.χ. 1,3,5-7")
     mv.add_argument("--yes", action="store_true",
                     help="έγκριση χωρίς ερώτηση (η προεπισκόπηση τυπώνεται πάντα πρώτα)")
+    mv.add_argument("--tasks", default=",".join(TASKS), metavar="ΕΡΓΑΣΙΕΣ",
+                    help="εργασίες που εκτελούνται, χωρισμένες με κόμμα (προεπιλογή: "
+                         + ",".join(TASKS) + ")")
     un = sub.add_parser("undo", help="αναίρεση εκτέλεσης από το manifest (δουλεύει και μετά από επανεκκίνηση)")
     un.add_argument("run", nargs="?", help="κωδικός εκτέλεσης· αν λείπει, εμφανίζεται η λίστα")
     un.add_argument("--last", action="store_true", help="η πιο πρόσφατη εκτέλεση")
@@ -48,6 +54,14 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--require-gui", action="store_true", help="αποτυχία αν δεν ανοίγει παράθυρο")
     sub.add_parser("gui", help="γραφικό περιβάλλον")
     return p
+
+
+def _parse_tasks(text: str):
+    """Επιστρέφει (tasks, None) ή (None, μήνυμα σφάλματος)."""
+    try:
+        return check_tasks([t.strip() for t in text.split(",") if t.strip()]), None
+    except ValueError as exc:
+        return None, str(exc)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,6 +95,12 @@ def main(argv: list[str] | None = None) -> int:
         except cfgmod.ConfigError as exc:
             print(f"Σφάλμα ρυθμίσεων: {exc}", file=sys.stderr)
             return 2
+        tasks = TASKS
+        if args.cmd == "plan":
+            tasks, err = _parse_tasks(args.tasks)
+            if err:
+                print(f"Σφάλμα: {err}", file=sys.stderr)
+                return 2
         roots = [args.folder] if args.folder else cfg.scan_roots
         if not roots:
             print("Δεν δόθηκε φάκελος και δεν υπάρχουν φάκελοι σάρωσης στις ρυθμίσεις.", file=sys.stderr)
@@ -93,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "scan":
                 print(format_report(report))
             else:
-                print(format_plan(build_plan(result, report, cfg)))
+                print(format_plan(build_plan(result, report, cfg, tasks=tasks)))
         return 0
     try:
         if args.config_cmd == "path":
@@ -130,6 +150,10 @@ def _move(args, config_path: Path) -> int:
     except cfgmod.ConfigError as exc:
         print(f"Σφάλμα ρυθμίσεων: {exc}", file=sys.stderr)
         return 2
+    tasks, err = _parse_tasks(args.tasks)
+    if err:
+        print(f"Σφάλμα: {err}", file=sys.stderr)
+        return 2
     folder = args.folder or (cfg.scan_roots[0] if cfg.scan_roots else None)
     if not folder:
         print("Δεν δόθηκε φάκελος και δεν υπάρχουν φάκελοι σάρωσης στις ρυθμίσεις.", file=sys.stderr)
@@ -138,7 +162,7 @@ def _move(args, config_path: Path) -> int:
     if not result.entries:
         print("Δεν βρέθηκαν αρχεία." + "".join(f"\n  ! {p.reason}" for p in result.problems))
         return 1
-    model = PreviewModel(build_plan(result, build_report(result), cfg))
+    model = PreviewModel(build_plan(result, build_report(result), cfg, tasks=tasks))
     if not model.rows:
         print("Δεν υπάρχει τίποτα να μετακινηθεί: όλα μένουν στη θέση τους.")
         return 0

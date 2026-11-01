@@ -82,6 +82,9 @@ class Config:
     images_folder: str = "Εικόνες"
     programs_folder: str = "Προγράμματα"
     duplicates_subfolder: str = "Διπλότυπα"
+    # Ενιαίοι φάκελοι που δεν σπάνε: ό,τι βρίσκεται μέσα τους (σε οποιοδήποτε βάθος)
+    # μένει στη θέση του. Απλά ονόματα φακέλων· η σύγκριση αγνοεί τόνους και κεφαλαία.
+    protected_folders: list[str] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -101,6 +104,13 @@ class Config:
         for attr in ("documents_folder", "images_folder", "programs_folder", "duplicates_subfolder"):
             if not _is_simple_name(getattr(self, attr)):
                 raise ConfigError(f"Το «{attr}» πρέπει να είναι απλό όνομα φακέλου, χωρίς κάθετους.")
+        if not isinstance(self.protected_folders, list) or not all(
+            _is_simple_name(n) for n in self.protected_folders
+        ):
+            raise ConfigError(
+                "Το «protected_folders» πρέπει να είναι λίστα με απλά ονόματα φακέλων, "
+                "χωρίς κάθετους."
+            )
         if not isinstance(self.topic_rules, list):
             raise ConfigError("Το «topic_rules» πρέπει να είναι λίστα κανόνων.")
         for rule in self.topic_rules:

@@ -20,6 +20,10 @@ from .scanner import Entry, Report, ScanResult
 MOVE, REVIEW, KEEP = "move", "review", "keep"
 MIN_YEAR = 1990
 
+# Εργασίες με τη σειρά που εκτελούνται: διπλότυπα, ίδια ονόματα, γενική ταξινόμηση.
+TASKS = ("duplicates", "same_names", "general")
+SAME_NAMES_SUBFOLDER = "Ίδια ονόματα"
+
 _YEAR_RE = re.compile(r"(?<!\d)(19[9]\d|20\d\d)(?!\d)")
 _IMG_DATE_RE = re.compile(
     r"(?<!\d)(19\d\d|20\d\d)[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
@@ -136,11 +140,39 @@ class _Dests:
         return cand, renamed
 
 
+def check_tasks(tasks) -> tuple[str, ...]:
+    """Ελέγχει τα ονόματα εργασιών. Σηκώνει ValueError με μήνυμα σε απλά ελληνικά."""
+    if isinstance(tasks, str):
+        tasks = (tasks,)
+    tasks = tuple(tasks)
+    if not tasks:
+        raise ValueError("Δεν επιλέχθηκε καμία εργασία. Διαθέσιμες: " + ", ".join(TASKS) + ".")
+    bad = [t for t in tasks if t not in TASKS]
+    if bad:
+        raise ValueError("Άγνωστη εργασία: " + ", ".join(f"«{t}»" for t in bad)
+                         + ". Διαθέσιμες: " + ", ".join(TASKS) + ".")
+    return tasks
+
+
+def _protected_ancestor(e: Entry, root: Path, protected: set[str]) -> str | None:
+    """Το όνομα του πιο εξωτερικού προστατευμένου φακέλου πάνω από το αρχείο (κάτω από τη ρίζα)."""
+    if not protected:
+        return None
+    try:
+        parts = e.path.relative_to(root).parts[:-1]
+    except ValueError:
+        return None
+    return next((part for part in parts if normalize(part) in protected), None)
+
+
 def build_plan(result: ScanResult, report: Report, cfg: Config,
-               today: date | None = None) -> Plan:
+               today: date | None = None, tasks=TASKS) -> Plan:
+    tasks = check_tasks(tasks)
     root = result.root
     max_year = (today or date.today()).year + 1
-    review_root = root / cfg.review_folder_name / cfg.duplicates_subfolder
+    review_base = root / cfg.review_folder_name
+    review_root = review_base / cfg.duplicates_subfolder
+    same_root = review_base / SAME_NAMES_SUBFOLDER
     dests = _Dests()
     proposals: dict[Path, Proposal] = {}
 
@@ -149,27 +181,62 @@ def build_plan(result: ScanResult, report: Report, cfg: Config,
     parents_with_subdirs = {p for e in result.entries for p in e.path.parents
                             if p != e.path.parent and p != root.parent}
 
-    # --- 1. Διπλότυπα: κρατιέται το πιο ρηχό αντίγραφο, τα υπόλοιπα στον φάκελο ελέγχου.
-    keep_in_group: dict[Path, Path] = {}
-    for group in report.duplicate_groups:
-        keeper = min(group, key=lambda e: (_depth(e, root), str(e.path).casefold()))
-        for e in group:
-            keep_in_group[e.path] = keeper.path
-            if e is keeper:
-                continue
-            if _in_app_folder(e, root, parents_with_non_exe, parents_with_subdirs):
-                # Ένα EXE μέσα σε φάκελο εφαρμογής δεν βγαίνει από εκεί, ούτε ως διπλότυπο.
-                continue
-            dest, renamed = dests.resolve(review_root, e.path.name, e.path)
-            reason = (f"Διπλότυπο (ίδιο περιεχόμενο) με «{keeper.path.relative_to(root)}», "
-                      "που βρίσκεται πιο ρηχά και κρατιέται. Πάει στον φάκελο ελέγχου, δεν διαγράφεται.")
-            if renamed:
-                reason += f" Μετονομάζεται σε «{dest.name}» γιατί υπάρχει ήδη αρχείο με το ίδιο όνομα."
-            proposals[e.path] = Proposal(e, REVIEW, dest, "διπλότυπο", reason)
+    # --- 0. Ενιαίοι φάκελοι: ό,τι είναι μέσα τους μένει, πριν από όλες τις εργασίες.
+    protected = {normalize(n) for n in cfg.protected_folders}
+    for e in result.entries:
+        folder = _protected_ancestor(e, root, protected)
+        if folder is not None:
+            proposals[e.path] = _keep(
+                e, "ενιαίος φάκελος",
+                f"Ανήκει στον ενιαίο φάκελο «{folder}», που δεν σπάει.")
 
-    # --- 2. Τα υπόλοιπα αρχεία.
+    # --- 1. Διπλότυπα: κρατιέται το πιο ρηχό αντίγραφο, τα υπόλοιπα στον φάκελο ελέγχου.
+    if "duplicates" in tasks:
+        for group in report.duplicate_groups:
+            keeper = min(group, key=lambda e: (_depth(e, root), str(e.path).casefold()))
+            for e in group:
+                if e is keeper or e.path in proposals:
+                    continue
+                if _in_app_folder(e, root, parents_with_non_exe, parents_with_subdirs):
+                    # Ένα EXE μέσα σε φάκελο εφαρμογής δεν βγαίνει από εκεί, ούτε ως διπλότυπο.
+                    continue
+                dest, renamed = dests.resolve(review_root, e.path.name, e.path)
+                reason = (f"Διπλότυπο (ίδιο περιεχόμενο) με «{keeper.path.relative_to(root)}», "
+                          "που βρίσκεται πιο ρηχά και κρατιέται. Πάει στον φάκελο ελέγχου, δεν διαγράφεται.")
+                if renamed:
+                    reason += f" Μετονομάζεται σε «{dest.name}» γιατί υπάρχει ήδη αρχείο με το ίδιο όνομα."
+                proposals[e.path] = Proposal(e, REVIEW, dest, "διπλότυπο", reason)
+
+    # --- 2. Ίδια ονόματα (διαφορετικό περιεχόμενο): το πιο ρηχό μένει, τα άλλα στον φάκελο ελέγχου.
+    if "same_names" in tasks:
+        for group in report.same_name_groups:
+            keeper = min(group, key=lambda e: (_depth(e, root), str(e.path).casefold()))
+            if keeper.path not in proposals:
+                proposals[keeper.path] = _keep(
+                    keeper, "ίδιο όνομα",
+                    f"Άλλα αρχεία έχουν το ίδιο όνομα «{keeper.path.name}» αλλά διαφορετικό "
+                    "περιεχόμενο. Αυτό βρίσκεται πιο ρηχά και μένει στη θέση του.")
+            for e in group:
+                if e is keeper or e.path in proposals:
+                    continue
+                if _in_app_folder(e, root, parents_with_non_exe, parents_with_subdirs):
+                    continue
+                dest, renamed = dests.resolve(same_root, e.path.name, e.path)
+                reason = (f"Ίδιο όνομα με «{keeper.path.relative_to(root)}», που βρίσκεται πιο ρηχά "
+                          "και μένει, αλλά διαφορετικό περιεχόμενο. Πάει στον φάκελο ελέγχου "
+                          f"«{SAME_NAMES_SUBFOLDER}», δεν διαγράφεται.")
+                if renamed:
+                    reason += f" Μετονομάζεται σε «{dest.name}» γιατί υπάρχει ήδη αρχείο με το ίδιο όνομα."
+                proposals[e.path] = Proposal(e, REVIEW, dest, "ίδιο όνομα", reason)
+
+    # --- 3. Γενική ταξινόμηση: μόνο για αρχεία χωρίς πρόταση.
     for e in result.entries:
         if e.path in proposals:
+            continue
+        if "general" not in tasks:
+            proposals[e.path] = _keep(
+                e, "εργασία μη επιλεγμένη",
+                "Μένει στη θέση του: η εργασία δεν είναι επιλεγμένη (γενική ταξινόμηση).")
             continue
         proposals[e.path] = _classify(
             e, root, cfg, dests, max_year, parents_with_non_exe, parents_with_subdirs)

@@ -19,10 +19,13 @@ from helpers import make_docx, make_pdf, make_xlsx, write
 TODAY = date(2026, 10, 31)
 
 
-def plan_for(root: Path, cfg: Config | None = None):
+def plan_for(root: Path, cfg: Config | None = None, **kw):
     cfg = cfg or Config()
     res = scan(root, cfg)
-    return build_plan(res, build_report(res), cfg, today=TODAY)
+    return build_plan(res, build_report(res), cfg, today=TODAY, **kw)
+
+
+NO_SAME = ("duplicates", "general")  # χωρίς την εργασία «same_names»
 
 
 def prop(plan, name):
@@ -181,7 +184,7 @@ def test_duplicates_go_to_review_keeper_is_shallowest(tmp_path):
 def test_same_name_collision_gets_suffix(tmp_path):
     make_docx(tmp_path / "a" / "ΔΕΗ 2023.docx", "ρεύμα ΔΕΗ")
     make_docx(tmp_path / "b" / "ΔΕΗ 2023.docx", "λογαριασμός ΔΕΗ ρεύμα")
-    plan = plan_for(tmp_path)
+    plan = plan_for(tmp_path, tasks=NO_SAME)
     dests = sorted(p.dest.name for p in plan.proposals)
     assert dests == ["ΔΕΗ 2023 (2).docx", "ΔΕΗ 2023.docx"]
     assert len({str(p.dest).casefold() for p in plan.proposals}) == 2
@@ -191,7 +194,7 @@ def test_same_name_collision_gets_suffix(tmp_path):
 def test_collision_with_existing_file_at_destination(tmp_path):
     make_docx(tmp_path / "Έγγραφα" / "Λογαριασμοί" / "2023" / "ΔΕΗ 2023.docx", "παλιό ΔΕΗ ρεύμα")
     make_docx(tmp_path / "ΔΕΗ 2023.docx", "νέο ΔΕΗ ρεύμα 2023")
-    p = [x for x in plan_for(tmp_path).proposals if x.entry.path.parent == tmp_path][0]
+    p = [x for x in plan_for(tmp_path, tasks=NO_SAME).proposals if x.entry.path.parent == tmp_path][0]
     assert p.action == MOVE and p.dest.name == "ΔΕΗ 2023 (2).docx"
 
 

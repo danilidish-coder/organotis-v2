@@ -18,14 +18,14 @@ from helpers import make_docx, write
 TESTS = Path(__file__).parent
 
 
-def plan_for(root, cfg=None):
+def plan_for(root, cfg=None, **kw):
     cfg = cfg or Config()
     res = scan(root, cfg)
-    return build_plan(res, build_report(res), cfg)
+    return build_plan(res, build_report(res), cfg, **kw)
 
 
-def approved_for(root, remove=()):
-    m = PreviewModel(plan_for(root))
+def approved_for(root, remove=(), **kw):
+    m = PreviewModel(plan_for(root, **kw))
     m.remove(remove)
     return m.approve()
 
@@ -146,7 +146,8 @@ def test_same_names_never_overwrite(tmp_path, mdir):
     make_docx(root / "a" / "ΔΕΗ 2023.docx", "ΔΕΗ ρεύμα α")
     make_docx(root / "b" / "ΔΕΗ 2023.docx", "ΔΕΗ ρεύμα β λογαριασμός")
     before = contents(root)
-    mover.execute(approved_for(root), mdir)
+    # Χωρίς την εργασία «same_names», τα ίδια ονόματα φτάνουν στον ίδιο φάκελο με επίθημα.
+    mover.execute(approved_for(root, tasks=("duplicates", "general")), mdir)
     out = sorted(p.name for p in (root / "Έγγραφα" / "Λογαριασμοί" / "2023").iterdir())
     assert out == ["ΔΕΗ 2023 (2).docx", "ΔΕΗ 2023.docx"]
     assert contents(root) == before
