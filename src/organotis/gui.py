@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import __version__, config as cfgmod
 from .approval import PreviewModel
 from .mover import execute
-from .planner import build_plan
+from .planner import TASKS, build_plan, normalize
 from .scanner import build_report, scan
 from .undo import list_runs, undo as run_undo
 
@@ -40,6 +40,23 @@ class App:
         ttk.Button(top, text="Επιλογή…", command=self.choose).pack(side="left")
         self.btn_scan = ttk.Button(top, text="Σάρωση και πρόταση", command=self.start_scan)
         self.btn_scan.pack(side="left", padx=6)
+
+        opts = ttk.LabelFrame(root, text="Εργασίες (με τη σειρά που εκτελούνται)", padding=6)
+        opts.pack(fill="x", padx=8)
+        self.task_vars = {t: tk.BooleanVar(value=True) for t in TASKS}
+        for t, label in (("duplicates", "1. Διπλότυπα"), ("same_names", "2. Ίδια ονόματα"),
+                         ("general", "3. Γενική ταξινόμηση")):
+            ttk.Checkbutton(opts, text=label, variable=self.task_vars[t],
+                            command=self.tasks_changed).pack(side="left", padx=(0, 12))
+        prot = ttk.Frame(opts)
+        prot.pack(side="right")
+        ttk.Label(prot, text="Προστατευμένοι φάκελοι (δεν σπάνε):").pack(side="left")
+        self.prot_list = tk.Listbox(prot, height=2, width=28, exportselection=False)
+        self.prot_list.pack(side="left", padx=6)
+        ttk.Button(prot, text="Προσθήκη προστατευμένου φακέλου…",
+                   command=self.add_protected).pack(side="left")
+        ttk.Button(prot, text="Αφαίρεση", command=self.remove_protected).pack(side="left", padx=4)
+        self.refresh_protected()
 
         cols = ("n", "action", "src", "dest", "reason")
         frame = ttk.Frame(root, padding=(8, 0))
@@ -86,6 +103,53 @@ class App:
         if d:
             self.folder.set(d)
 
+    # ---- εργασίες και προστατευμένοι φάκελοι ----
+    def selected_tasks(self) -> tuple[str, ...]:
+        return tuple(t for t in TASKS if self.task_vars[t].get())
+
+    def tasks_changed(self) -> None:
+        # Η προηγούμενη πρόταση δεν ισχύει πια: ζητάμε νέα σάρωση.
+        if self.model is not None:
+            self.model = None
+            self.render()
+        self.status.set("Άλλαξαν οι εργασίες. Πάτα «Σάρωση και πρόταση» για νέα πρόταση.")
+
+    def refresh_protected(self) -> None:
+        self.prot_list.delete(0, "end")
+        for n in self.cfg.protected_folders:
+            self.prot_list.insert("end", n)
+
+    def _save_protected(self, names: list[str]) -> bool:
+        old = self.cfg.protected_folders
+        self.cfg.protected_folders = names
+        try:
+            cfgmod.save(self.cfg, self.config_path)
+        except (cfgmod.ConfigError, OSError) as exc:
+            self.cfg.protected_folders = old
+            messagebox.showerror("Σφάλμα ρυθμίσεων", str(exc))
+            return False
+        self.refresh_protected()
+        self.tasks_changed()
+        return True
+
+    def add_protected_name(self, name: str) -> bool:
+        name = name.strip()
+        if any(normalize(n) == normalize(name) for n in self.cfg.protected_folders):
+            return False
+        return self._save_protected(self.cfg.protected_folders + [name])
+
+    def add_protected(self) -> None:
+        d = filedialog.askdirectory(title="Φάκελος που δεν πρέπει να σπάσει")
+        if d:
+            self.add_protected_name(Path(d).name)
+
+    def remove_protected(self) -> None:
+        sel = self.prot_list.curselection()
+        if sel:
+            names = list(self.cfg.protected_folders)
+            del names[sel[0]]
+            self._save_protected(names)
+
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.btn_scan.configure(state="disabled" if busy else "normal")
@@ -97,13 +161,17 @@ class App:
         folder = self.folder.get().strip()
         if not folder or self.busy:
             return
+        tasks = self.selected_tasks()
+        if not tasks:
+            messagebox.showwarning("Εργασίες", "Διάλεξε τουλάχιστον μία εργασία.")
+            return
         self.set_busy(True)
         self.status.set("Σάρωση… (μόνο ανάγνωση)")
 
         def work() -> None:
             try:
                 res = scan(Path(folder).expanduser(), self.cfg)
-                self.q.put(("plan", build_plan(res, build_report(res), self.cfg)))
+                self.q.put(("plan", build_plan(res, build_report(res), self.cfg, tasks=tasks)))
             except Exception as exc:  # εμφανίζεται στον χρήστη, δεν κρύβεται
                 self.q.put(("error", f"Η σάρωση απέτυχε: {exc}"))
         threading.Thread(target=work, daemon=True).start()

@@ -130,3 +130,41 @@ def test_undo_dialog_decline_changes_nothing(app, tree, monkeypatch):
     monkeypatch.setattr(gui.messagebox, "askyesno", lambda *a, **k: False)
     app.confirm_and_undo(); app.root.update()
     assert sorted(p.relative_to(tree) for p in tree.rglob("*")) == moved
+
+
+def test_task_checkboxes_drive_the_plan(app, tree):
+    assert app.selected_tasks() == ("duplicates", "same_names", "general")
+    app.task_vars["general"].set(False)
+    app.folder.set(str(tree))
+    app.start_scan()
+    pump(app, lambda: app.model is not None)
+    assert all(r.proposal.rule == "διπλότυπο" or r.proposal.action != "move"
+               for r in app.model.rows)
+    assert len(app.model.rows) == 1  # μόνο το διπλότυπο
+
+
+def test_no_task_selected_does_not_scan(app, tree, monkeypatch):
+    for v in app.task_vars.values():
+        v.set(False)
+    warned = []
+    monkeypatch.setattr(gui.messagebox, "showwarning", lambda *a, **k: warned.append(a))
+    app.folder.set(str(tree))
+    app.start_scan()
+    assert warned and not app.busy
+
+
+def test_protected_folder_add_saves_config_and_remove(app, tmp_path):
+    assert app.add_protected_name("Ενιαίος")
+    assert not app.add_protected_name("ΕΝΙΑΙΟΣ")  # ίδιο όνομα (χωρίς τόνους/πεζά)
+    assert cfgmod.load(app.config_path).protected_folders == ["Ενιαίος"]
+    assert app.prot_list.get(0) == "Ενιαίος"
+    app.prot_list.selection_set(0)
+    app.remove_protected()
+    assert cfgmod.load(app.config_path).protected_folders == []
+
+
+def test_protected_folder_bad_name_shows_error_and_keeps_config(app, monkeypatch):
+    errs = []
+    monkeypatch.setattr(gui.messagebox, "showerror", lambda *a, **k: errs.append(a))
+    assert not app.add_protected_name("a/b")
+    assert errs and app.cfg.protected_folders == []
